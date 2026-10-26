@@ -17,7 +17,50 @@ homepage.workspace = true
 name = "centrifuge"
 
 [dependencies]
-centrifuge-core.workspace = true
+centrifuge-core = { workspace = true, default-features = false }
+bytes = "1.12"
+futures-core = "0.3.31"
+futures-util = { version = "0.3.31", default-features = false, features = ["std", "sink"] }
+http = "1.3"
+http-body-util = { version = "0.1.3", optional = true }
+hyper = { version = "1.7", default-features = false, features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1.21", default-features = false, features = ["client-proxy", "tokio"] }
+rustls = { version = "0.23.31", default-features = false, features = ["std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7.1"
+serde = { version = "1.0.228", optional = true }
+serde_json = { version = "1.0.140", optional = true }
+tokio = { version = "1.47", features = ["rt", "sync", "time", "net", "macros", "io-util"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["tls12", "logging"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+tracing = { version = "0.1.41", default-features = false, features = ["std"] }
+url = "2.5"
+
+[dev-dependencies]
+centrifuge-fake-server = { path = "../centrifuge-fake-server" }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "time", "test-util"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+
+[features]
+default = ["protobuf", "json", "http-stream", "system-proxy", "aws-lc-rs", "delta", "serde"]
+# Protocol codecs. Protobuf is the default protocol.
+protobuf = []
+json = ["centrifuge-core/json"]
+# HTTP-streaming transport (with bidirectional emulation) and fallback.
+http-stream = ["dep:hyper", "dep:http-body-util"]
+# OS proxy settings (macOS System Configuration, Windows registry).
+system-proxy = ["hyper-util/client-proxy-system"]
+# rustls crypto provider: exactly one is used (aws-lc-rs when both are on).
+aws-lc-rs = ["rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
+ring = ["rustls/ring", "tokio-rustls/ring"]
+# Fossil delta decoding (always compiled into the core; the flag gates asking for it).
+delta = []
+# Typed JSON helpers (`publish_json`, `Publication::json`, …).
+serde = ["dep:serde", "dep:serde_json", "centrifuge-core/json"]
+# Accept a raw `rustls::ClientConfig` (semver-exempt: rustls is pre-1.0).
+rustls-config = []
+# Constructors for events and results, for unit-testing handlers.
+test-util = []
 
 [lints]
 workspace = true

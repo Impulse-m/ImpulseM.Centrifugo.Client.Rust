@@ -246,6 +246,12 @@ pub struct RpcResult {
     pub data: Bytes,
 }
 
+impl From<proto::RpcResult> for RpcResult {
+    fn from(r: proto::RpcResult) -> Self {
+        Self { data: r.data }
+    }
+}
+
 impl RpcResult {
     /// Deserializes the payload as JSON.
     ///

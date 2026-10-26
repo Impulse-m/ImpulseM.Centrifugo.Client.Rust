@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/centrifuge-core", "crates/centrifuge-client", "xtask"]
+members = ["crates/centrifuge-core", "crates/centrifuge-client", "crates/centrifuge-fake-server", "xtask"]
 
 [workspace.package]
 version = "0.0.1"
