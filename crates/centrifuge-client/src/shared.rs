@@ -144,6 +144,8 @@ pub(crate) struct Shared {
     pub(crate) net: Arc<crate::transport::net::Net>,
     /// `close()` futures waiting for the driver to stop; `None` once it has.
     pub(crate) close_waiters: Mutex<Option<Vec<tokio::sync::oneshot::Sender<()>>>>,
+    /// Serializes op sending; `true` once `close()` was sent.
+    op_lock: Mutex<bool>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -186,11 +188,19 @@ impl Shared {
             http_headers: Mutex::new(http_headers),
             net,
             close_waiters: Mutex::new(Some(Vec::new())),
+            op_lock: Mutex::new(false),
         }
     }
 
     /// Sends an op to the driver, recording its effect for `state()`.
     pub(crate) fn send_op(&self, op: Op) -> u64 {
+        // Sequence numbers go out in order, and nothing after close: the
+        // driver never applies it, so waiters would wait for it in vain.
+        let mut closed = lock(&self.op_lock);
+        if *closed {
+            return self.requested_seq.load(Ordering::SeqCst);
+        }
+        *closed = matches!(op, Op::Close);
         let seq = self.requested_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.commands.send(Command::Op(SeqOp { seq, op }));
         seq

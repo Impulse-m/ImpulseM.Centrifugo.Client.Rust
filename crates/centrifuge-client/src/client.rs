@@ -862,6 +862,7 @@ impl ClientBuilder {
     ///
     /// [`Error::Configuration`] for invalid options, or when there's no Tokio
     /// runtime (neither [`runtime()`](Self::runtime) nor a current one).
+    #[allow(clippy::too_many_lines)] // validation, then wiring; clearer in one place
     pub fn build(self) -> Result<Client, Error> {
         let endpoints = self.endpoints()?;
         let runtime = match self.runtime.clone() {

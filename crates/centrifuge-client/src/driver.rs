@@ -281,7 +281,7 @@ impl Driver {
                 drop(permit);
             }
             Inbound::Closed { transport, reason } => {
-                self.step(Input::Closed { transport, reason }, None).await
+                self.step(Input::Closed { transport, reason }, None).await;
             }
             Inbound::WriteFailed {
                 transport,

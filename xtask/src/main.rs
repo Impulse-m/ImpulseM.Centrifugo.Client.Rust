@@ -4,22 +4,21 @@
 //!   `crates/centrifuge-core/proto/client.proto`. Needs `protoc` on `PATH`.
 //!   The output is committed, so users never need `protoc`.
 
+#![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        Some("proto") => match proto() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("xtask proto: {e}");
-                ExitCode::FAILURE
-            }
-        },
-        _ => {
-            eprintln!("usage: cargo xtask proto");
+    if let Some("proto") = std::env::args().nth(1).as_deref() { match proto() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("xtask proto: {e}");
             ExitCode::FAILURE
         }
+    } } else {
+        eprintln!("usage: cargo xtask proto");
+        ExitCode::FAILURE
     }
 }
 

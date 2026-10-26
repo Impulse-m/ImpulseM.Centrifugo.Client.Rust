@@ -112,6 +112,10 @@ async fn wait_ready(
     loop {
         {
             let snap = rx.borrow_and_update();
+            // Closed is final: nothing after it is ever applied.
+            if snap.state == State::Closed {
+                return Err(Error::ClientClosed);
+            }
             let caught_up = snap.applied_seq >= seq || nested;
             if caught_up {
                 // The state as of this call (projected inside handlers).

@@ -194,6 +194,7 @@ pub(crate) type Pending = Vec<oneshot::Receiver<()>>;
 impl Delivery {
     /// Runs the handlers of `events` and offers stream items. Returns the batch
     /// result and acks still to wait for (streams).
+    #[allow(clippy::too_many_lines)] // one arm per event kind
     pub(crate) fn run(
         &self,
         events: Vec<Event>,
@@ -461,17 +462,17 @@ impl Delivery {
         let id = self.shared.id;
         match ev.clone() {
             SubscriptionEvent::Subscribing(e) => {
-                run_slot!(&inner.handlers, subscribing, &handle, e, *res, id)
+                run_slot!(&inner.handlers, subscribing, &handle, e, *res, id);
             }
             SubscriptionEvent::Subscribed(e) => {
-                run_slot!(&inner.handlers, subscribed, &handle, e, *res, id)
+                run_slot!(&inner.handlers, subscribed, &handle, e, *res, id);
             }
             SubscriptionEvent::Unsubscribed(e) => {
-                run_slot!(&inner.handlers, unsubscribed, &handle, e, *res, id)
+                run_slot!(&inner.handlers, unsubscribed, &handle, e, *res, id);
             }
             SubscriptionEvent::Error(e) => run_slot!(&inner.handlers, error, &handle, e, *res, id),
             SubscriptionEvent::Publication(e) => {
-                run_slot!(&inner.handlers, publication, &handle, e, *res, id)
+                run_slot!(&inner.handlers, publication, &handle, e, *res, id);
             }
             SubscriptionEvent::Join(e) => run_slot!(&inner.handlers, join, &handle, e, *res, id),
             SubscriptionEvent::Leave(e) => run_slot!(&inner.handlers, leave, &handle, e, *res, id),
