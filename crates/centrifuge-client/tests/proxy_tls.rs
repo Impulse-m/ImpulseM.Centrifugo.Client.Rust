@@ -6,6 +6,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::many_single_char_names,
     clippy::print_stderr
 )] // test code
 
