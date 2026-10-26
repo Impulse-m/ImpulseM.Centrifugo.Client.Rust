@@ -355,16 +355,21 @@ impl FakeServer {
         (ch.offset, ch.epoch.clone())
     }
 
-    /// Starts a new epoch for a channel (history lost).
+    /// Starts a new epoch for a channel (history lost). Subscribers can't
+    /// continue: they're unsubscribed with "insufficient state" (2500, a
+    /// resubscribe code), as the real server does.
     pub fn reset_stream(&self, channel: &str) {
-        let mut st = self.inner.st();
-        let epoch = format!("e{}", st.next_epoch);
-        st.next_epoch += 1;
-        let ch = server::channel(&mut st, channel);
-        *ch = Channel {
-            epoch,
-            ..Channel::default()
-        };
+        {
+            let mut st = self.inner.st();
+            let epoch = format!("e{}", st.next_epoch);
+            st.next_epoch += 1;
+            let ch = server::channel(&mut st, channel);
+            *ch = Channel {
+                epoch,
+                ..Channel::default()
+            };
+        }
+        self.unsubscribe_push(channel, 2500, "insufficient state");
     }
 
     pub fn join(&self, channel: &str, info: proto::ClientInfo) {
