@@ -140,6 +140,7 @@ pub fn encode_commands(
     res
 }
 
+#[cfg_attr(not(feature = "json"), allow(clippy::unnecessary_wraps))] // only JSON can fail
 fn encode_into(
     protocol: Protocol,
     commands: &[proto::Command],
