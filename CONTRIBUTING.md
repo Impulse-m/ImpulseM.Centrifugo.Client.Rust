@@ -13,7 +13,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo +nightly doc --workspace --no-deps --all-features
-cargo hack check --workspace --feature-powerset --no-dev-deps   # cargo install cargo-hack
+cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring \
+  --exclude-features test-util --no-dev-deps        # cargo install cargo-hack
 cargo check -p centrifuge-core --target wasm32-unknown-unknown   # rustup target add wasm32-unknown-unknown
 cargo deny check                                    # cargo install cargo-deny
 typos                                               # cargo install typos-cli
@@ -23,19 +24,46 @@ The MSRV (`rust-version` in `Cargo.toml`) is checked in CI with `cargo check`.
 
 ### Test servers
 
-Integration tests run against Centrifugo `v6.10.2` from `docker-compose.yml` (configs in `tests/centrifugo/`):
+Most tests need no server: they use the in-process fake server (`crates/centrifuge-fake-server`, docs/spec.md §11.2) over every transport and protocol. The real-server tests run against Centrifugo `v6.10.2` from `docker-compose.yml` (configs in `tests/centrifugo/`), and are skipped unless enabled:
 
 ```sh
-docker compose up -d      # insecure on :8010, secure (tokens required) on :8012
-docker compose down
+docker compose up -d                     # insecure on :8010, secure (tokens required) on :8012
+docker compose --profile pro up -d       # also Centrifugo PRO on :8014 (channel compaction)
+CENTRIFUGO_TESTS=1 CENTRIFUGO_PRO_TESTS=1 cargo test -p centrifuge-client --test real_server
+docker compose --profile pro down
 ```
 
-The ports differ from other SDKs' stacks (8000/8002), so both can run at once. Most tests need no server at all: they use the in-process fake server (`crates/centrifuge-fake-server`, docs/spec.md §11.2).
+The ports differ from other SDKs' stacks (8000/8002), so both can run at once.
+
+### The TLA+ trace replay
+
+`crates/centrifuge-core/src/machine/replay.rs` replays traces of the SDK TLA+ model into the core (docs/spec.md §11.1). The traces are committed under `crates/centrifuge-core/tests/tla/`, so the test needs nothing else. After a change to the model, regenerate them (needs Java and the model, which is in a private repository):
+
+```sh
+TLA_MODEL=../centrifugo-pro-source/tla/sdk cargo xtask tla-traces
+```
+
+A divergence names the step and the trace's actions. Either the core is wrong, or `tests/tla/Replay.tla` (the schedules this SDK implements) needs a change; never edit the traces.
+
+### Benchmarks
+
+```sh
+cargo bench -p centrifuge-core     # codecs, stream reassembly, fossil delta
+```
+
+Pull requests touching the core get a comparison against their base in the "Benchmarks" workflow's summary.
+
+### Validation harness
+
+Seeded chaos, probes of known bug patterns from other SDKs, real-server chaos and process suspension live in the `sdk_validation` repository (`centrifuge-rust/`), built against a frozen copy of a commit here. Run it before releases and for changes to the connection or subscription logic.
 
 ## Layout
 
 - `crates/centrifuge-client`: the SDK. Package `centrifuge-client`, imported as `centrifuge`.
 - `crates/centrifuge-core`: the sans-IO state machine (docs/spec.md §9). It does no IO and has no runtime. It must keep building for `wasm32-unknown-unknown` (checked in CI), so don't add dependencies to it that break that.
+- `crates/centrifuge-fake-server`: the in-process fake Centrifugo for tests (not published).
+- `xtask`: maintainer tasks (`cargo xtask proto`, `cargo xtask tla-traces`).
+- `docs/spec.md`: the behaviour; `docs/api.md`: the public API on one page; `docs/decisions-pending.md`: implementation choices awaiting review.
 
 Both crates are released together with the same version.
 
