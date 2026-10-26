@@ -495,7 +495,7 @@ fn liveness_counts_received_data_not_processed_data() {
 
 /// The busy-connection grace of a command timeout is granted once: a server
 /// that keeps pinging can't keep an unanswered subscribe pending forever
-/// (found by sdk_validation chaos-fake, seed 195).
+/// (found by `sdk_validation` chaos-fake, seed 195).
 #[test]
 fn command_timeout_grace_while_data_arrives_is_granted_once() {
     let mut h = H::json();
