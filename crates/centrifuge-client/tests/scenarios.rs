@@ -424,8 +424,10 @@ async fn handler_reentrancy() {
             let res = rt.block_on(client.rpc("m", r#"{"in":"handler"}"#));
             r1.push(format!(
                 "rpc {}",
-                res.map(|r| String::from_utf8_lossy(&r.data).into_owned())
-                    .unwrap_or_else(|e| e.to_string())
+                res.map_or_else(
+                    |e| e.to_string(),
+                    |r| String::from_utf8_lossy(&r.data).into_owned()
+                )
             ));
             // State changes are projected at once inside handlers.
             client.disconnect();
@@ -449,7 +451,7 @@ async fn handler_reentrancy() {
     assert_eq!(ev.wait("publish").await, "publish Err(WouldDeadlock)");
 }
 
-/// Streams deliver with hand-off: the next step waits until next() takes the item.
+/// Streams deliver with hand-off: the next step waits until `next()` takes the item.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_streams() {
     let srv = server().await;
