@@ -35,7 +35,7 @@
 //! See the [README](https://github.com/centrifugal/centrifuge-rust) for a
 //! guide and the [design](https://github.com/centrifugal/centrifuge-rust/blob/main/docs/spec.md)
 //! for the exact behaviour.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod calls;
 mod client;

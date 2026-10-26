@@ -869,10 +869,10 @@ impl Replay {
         }
 
         // Commands: the model's new ones are [prev.nid, next.nid).
-        let (pn, nn) = (i(prev, "nid"), i(next, "nid"));
+        let (prev_nid, next_nid) = (i(prev, "nid"), i(next, "nid"));
         let new_cmds: Vec<Value> = arr(next, "toS")
             .iter()
-            .filter(|c| i(c, "id") >= pn && i(c, "id") < nn)
+            .filter(|c| i(c, "id") >= prev_nid && i(c, "id") < next_nid)
             .cloned()
             .collect();
         let mut fresh = std::mem::take(&mut self.out.commands);

@@ -134,10 +134,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # When the json/protobuf and aws-lc-rs/ring features land, add
-      # --at-least-one-of json,protobuf --at-least-one-of aws-lc-rs,ring
-      # (those combinations are compile_error!, docs/spec.md §3.3).
-      - run: cargo hack check --workspace --feature-powerset --no-dev-deps --locked
+      # Without a TLS crypto provider the client is a compile_error! (spec
+      # §3.3); depth 3 covers the codec × transport × provider combinations.
+      - run: cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring --exclude-features test-util --no-dev-deps --locked
         env:
           RUSTFLAGS: -D warnings
 

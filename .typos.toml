@@ -1,0 +1,13 @@
+[default.extend-words]
+# Filter operator "not in" (client.proto).
+nin = "nin"
+# A base64 test vector.
+fo = "fo"
+
+[files]
+extend-exclude = [
+  # Upstream test data (fossil delta vectors) and generated code.
+  "crates/centrifuge-core/testdata/",
+  "crates/centrifuge-core/src/proto/generated.rs",
+  "crates/centrifuge-core/tests/tla/",
+]

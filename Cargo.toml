@@ -13,7 +13,7 @@ repository = "https://github.com/centrifugal/centrifuge-rust"
 homepage = "https://centrifugal.dev"
 
 [workspace.dependencies]
-centrifuge-core = { version = "0.0.1", path = "crates/centrifuge-core" }
+centrifuge-core = { version = "0.0.1", path = "crates/centrifuge-core", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

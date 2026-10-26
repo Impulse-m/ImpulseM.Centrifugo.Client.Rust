@@ -28,6 +28,8 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The fake server is a path dev-dependency (never published, stripped on publish).
+allow-wildcard-paths = true
 # Keep OpenSSL out: TLS is rustls-only (docs/spec.md §3.2).
 deny = [
   { crate = "openssl-sys", reason = "TLS is rustls-only" },
