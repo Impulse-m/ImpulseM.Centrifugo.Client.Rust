@@ -410,20 +410,24 @@ impl Driver {
         } else {
             *lock(&self.shared.connected_since) = None;
         }
-        self.shared.snapshot.send_replace(snap);
-        let by_key = lock(&self.shared.by_key);
-        for key in subs {
-            let (Some(inner), Some((st, _session, unsubscribes))) =
-                (by_key.get(key), self.core.subscription(*key))
-            else {
-                continue;
-            };
-            inner.snapshot.send_replace(SubSnapshot {
-                state: st,
-                unsubscribes,
-                ready: after_delivery && st == SubState::Subscribed,
-            });
+        // Subscriptions first: whoever sees the new `applied_seq` must also see
+        // the subscription states it led to.
+        {
+            let by_key = lock(&self.shared.by_key);
+            for key in subs {
+                let (Some(inner), Some((st, _session, unsubscribes))) =
+                    (by_key.get(key), self.core.subscription(*key))
+                else {
+                    continue;
+                };
+                inner.snapshot.send_replace(SubSnapshot {
+                    state: st,
+                    unsubscribes,
+                    ready: after_delivery && st == SubState::Subscribed,
+                });
+            }
         }
+        self.shared.snapshot.send_replace(snap);
     }
 
     fn open(&mut self, req: OpenRequest) {

@@ -10,13 +10,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    if let Some("proto") = std::env::args().nth(1).as_deref() { match proto() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("xtask proto: {e}");
-            ExitCode::FAILURE
+    if let Some("proto") = std::env::args().nth(1).as_deref() {
+        match proto() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask proto: {e}");
+                ExitCode::FAILURE
+            }
         }
-    } } else {
+    } else {
         eprintln!("usage: cargo xtask proto");
         ExitCode::FAILURE
     }
