@@ -968,7 +968,7 @@ impl Core {
         let _ = t;
     }
 
-    pub(super) fn on_resumed(&mut self, slept: Duration, now: Instant, _out: &mut Outputs) {
+    pub(super) fn on_resumed(&mut self, slept: Duration, now: Instant, out: &mut Outputs) {
         // A laptop wake: the monotonic clock didn't move while asleep.
         if let Some(exp) = self.conn.token_expires_at {
             if exp <= now + slept && self.cfg.has_get_token {
@@ -978,6 +978,22 @@ impl Core {
         }
         if self.state == State::Connected {
             if let Some(window) = self.conn.ping_window {
+                if slept >= window {
+                    // Asleep longer than the server waits for a pong: it has
+                    // dropped this connection, which may also be stuck on a
+                    // network that's gone. Reconnect now rather than after a
+                    // full no-ping window (spec §9.7).
+                    if let Some(t) = self.conn.current.as_ref().map(|t| t.id) {
+                        self.transport_lost(
+                            t,
+                            connecting::TRANSPORT_CLOSED,
+                            "connection lost during system sleep",
+                            now,
+                            out,
+                        );
+                    }
+                    return;
+                }
                 self.timers.arm_after(TimerKey::NoPing, now, window);
             }
         }

@@ -1156,6 +1156,7 @@ enum Inbound { Messages(Vec<Reply>), Closed { code: Option<u16>, reason: String 
   - it gets the grace
   - token expiry (kept as wall time, §6.6) is re-checked
   - the no-ping window restarts from the wake, so a connection that died during sleep is found within one ping interval (centrifuge-swift "uptime" finding)
+  - a sleep at least as long as the no-ping window (the server's ping interval plus `max_server_ping_delay`) reconnects at once: the server has dropped a connection that missed its pongs that long, and the old socket may be stuck on a network that's gone
 
 ### 9.8 Lifetime and resource cleanup
 

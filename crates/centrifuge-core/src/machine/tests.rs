@@ -530,6 +530,29 @@ fn command_timeout_grace_while_data_arrives_is_granted_once() {
     assert!(names(&h.take_events()).iter().any(|e| e == "connecting(3)"));
 }
 
+/// A system sleep longer than the ping window reconnects at once; a short one
+/// only re-arms the liveness check (spec §9.7).
+#[test]
+fn system_sleep_past_the_ping_window_reconnects_at_once() {
+    let mut h = H::json();
+    h.connect();
+    h.take_events();
+    h.step(Input::Resumed {
+        slept: Duration::from_secs(5),
+    });
+    assert_eq!(
+        h.core.state(),
+        State::Connected,
+        "a short sleep: still connected"
+    );
+    assert!(h.take_events().is_empty());
+    h.step(Input::Resumed {
+        slept: Duration::from_secs(3600),
+    });
+    assert_eq!(h.core.state(), State::Connecting);
+    assert_eq!(names(&h.take_events()), ["connecting(1)"]);
+}
+
 #[test]
 fn late_timer_gets_one_grace_period() {
     let mut h = H::json();
