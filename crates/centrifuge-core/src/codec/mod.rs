@@ -100,6 +100,8 @@ pub fn validate_payload(
     field: &'static str,
     data: &[u8],
 ) -> Result<(), EncodeError> {
+    #[cfg(not(feature = "json"))]
+    let _ = (field, data);
     match protocol {
         Protocol::Protobuf => Ok(()),
         #[cfg(feature = "json")]
@@ -253,6 +255,7 @@ pub struct StreamDecoder {
     protocol: Protocol,
     buf: BytesMut,
     /// JSON: how far `buf` has been scanned for `\n` without finding one.
+    #[cfg_attr(not(feature = "json"), allow(dead_code))]
     scanned: usize,
     max: usize,
 }
