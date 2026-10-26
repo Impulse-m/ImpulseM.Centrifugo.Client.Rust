@@ -20,6 +20,15 @@ mod server;
 mod sub;
 mod timers;
 
+#[cfg(all(test, feature = "json"))]
+#[allow(
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::unused_self,
+    clippy::print_stdout,
+    clippy::panic
+)]
+mod replay;
 #[cfg(test)]
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 mod tests;

@@ -112,6 +112,14 @@ impl Sub {
 }
 
 impl Core {
+    /// Commands may reach the server out of order (HTTP-streaming emulation).
+    fn emulation(&self) -> bool {
+        self.conn
+            .current
+            .as_ref()
+            .is_some_and(|t| t.kind.uses_emulation())
+    }
+
     fn book(&mut self, channel: &str) -> &mut ChannelBook {
         self.channels.entry(channel.to_owned()).or_default()
     }
@@ -156,12 +164,17 @@ impl Core {
         // Write the command, then emit, then await (pattern 44).
         if connected {
             match inflight {
-                Some(Inflight::Command(id)) => {
-                    // Deferred until the subscribe reply (§7.3).
+                // Over emulation the unsubscribe could overtake the subscribe:
+                // deferred until its reply (§7.3, TLA+ `Defer`).
+                Some(Inflight::Command(id)) if self.emulation() => {
                     self.book(&channel).deferred = Some(id);
                 }
-                _ if was_subscribed => self.send_unsubscribe(&channel, now, out),
-                _ => {}
+                // In order (WebSocket): at once; the subscribe's reply is stale.
+                // A flow waiting for get_token / get_state counts as in flight
+                // too, as in centrifuge-js (`_inflight`) and the TLA+ model.
+                Some(_) => self.send_unsubscribe(&channel, now, out),
+                None if was_subscribed => self.send_unsubscribe(&channel, now, out),
+                None => {}
             }
         }
         self.unsubscribe_local(
@@ -283,10 +296,14 @@ impl Core {
         if s.state != SubState::Subscribing || s.inflight.is_some() {
             return;
         }
-        if !self
-            .channels
-            .get(&s.cfg.channel)
-            .is_none_or(ChannelBook::idle)
+        // Over emulation a subscribe could overtake an earlier unsubscribe of
+        // the channel: it waits for their replies (TLA+ `CanStart`). In order,
+        // the server handles them first anyway.
+        if self.emulation()
+            && !self
+                .channels
+                .get(&s.cfg.channel)
+                .is_none_or(ChannelBook::idle)
         {
             return;
         }

@@ -33,7 +33,6 @@ Prior art: the community crate `IntrepidAI/tokio-centrifuge`. This SDK is an off
 | Behaviour | centrifuge-js | This SDK | Why |
 |---|---|---|---|
 | A call made inside an event handler (`unsubscribe()`, `disconnect()`, ...) | Runs nested at once: its events fire inside the call | `state()` changes at once, as in JS (§9.2), but the op is applied and its events delivered right after the handler returns, before anything else is processed | Steps in the core are atomic, and handlers can run on another thread (§9.4). Nested execution would need the "emit, then re-check" pattern behind catalogue patterns 7, 21 and 46. Both orders are allowed by the TLA+ model ("the application may act between any two steps"). |
-| `unsubscribe()` while a subscribe is in flight | Defers the unsubscribe until the subscribe reply **over emulation only** (#443) | Defers it on every transport | One code path to test. Over WebSocket commands are ordered anyway, so the deferral changes nothing visible (§7.3). |
 | Reconnect backoff reset | On the connect reply, except over emulation | After the first server ping or command reply, on every transport | A failure that always follows the connect would otherwise reconnect at the minimum delay forever (centrifuge-python F4, pattern 67) (§6.2) |
 | `refresh` push (server API `refresh`) | Ignored | Re-arms or cancels the client's refresh timer, only in client-side refresh mode | The client's schedule follows the server's new expiry (§6.6) |
 | After falling back to HTTP-streaming (phase 2) | Stays on the fallback for good | Returns to WebSocket on the app's next `connect()` after `disconnect()`, or after 1 h | Long-lived processes move between networks (§5.8) |
@@ -849,7 +848,8 @@ Steps:
   - waits for those replies before its first subscribe, so the server never answers 105
   - starts with no position (only `since`)
   - never receives the removed object's replies or callback results
-- `unsubscribe()` while a subscribe is in flight: emit `unsubscribed` at once, but **defer** the `unsubscribe` command until the subscribe reply. Send it only if that subscribe succeeded. A later `subscribe()` of the channel waits for the replies of earlier unsubscribes. This is a TLA+ decision (`bug_no_unsub_defer`), and centrifuge-js does it over emulation since #443: there, separate requests can reach the server out of order. Here the rule applies to every transport, so there's one code path to test.
+- `unsubscribe()` while a subscribe is in flight, **over emulation**: emit `unsubscribed` at once, but **defer** the `unsubscribe` command until the subscribe reply. Send it only if that subscribe succeeded. A later `subscribe()` of the channel waits for the replies of earlier unsubscribes. There, separate requests can reach the server out of order. This is a TLA+ decision (`bug_no_unsub_defer`), and centrifuge-js does it since #443. **Over WebSocket** commands reach the server in order, so the unsubscribe goes at once and a later subscribe doesn't wait (TLA+ `Ordered`; the subscribe's reply is then stale). An earlier draft deferred on every transport; replaying the TLA+ traces showed the model doesn't allow that schedule, so the core follows the model.
+- A flow waiting for `get_token` or `get_state` counts as in flight: `unsubscribe()` sends an `unsubscribe` command then too, as centrifuge-js (`_inflight`) and the TLA+ model (`NeedsUnsubCmd`) do. It's redundant (no subscribe was sent for the flow) but harmless, and keeps the server-side bookkeeping identical to the reference.
 - An error or timeout on the unsubscribe reply, or an unsubscribe command that can't be written, reconnects the client with `connecting(4, "unsubscribe error")`, so the server ends up with no stale subscription (pattern 79). This applies **only while the `conn_generation` it was sent in is still connected**. A failure caused by a teardown (`ClientDisconnected` after `disconnect()` or a transport close) does nothing, and doesn't advance the backoff (centrifuge-js #402, centrifuge-dart #157, centrifuge-swift R2).
 - An unsubscribe **push** is applied only when `subscribed`. Otherwise it is ignored (pattern 37). A resubscribe code arriving after the app's `unsubscribe()` must not move it back to subscribing. This includes a 2502, or a code below 2500, arriving while our subscribe is in flight. The server sends the unsubscribe push of a subscribe in progress only **after** its reply (TLA+ server guarantee), so a push that arrives first belongs to the previous subscription. Applying it is the TLA+ bug variant `unsub_push_any_state`.
 
@@ -1197,7 +1197,7 @@ Later features must arrive as **additive** changes: no breaking release and no r
 | Optimistic subscriptions | 3 | Sending subscribes before the connect reply is a core-only change. The TLA+ model already allows it over any transport. |
 | More transports (WebTransport, SSE) | on demand | `TransportKind` is `#[non_exhaustive]`, and the fallback list and the `Transport` trait are transport-agnostic. |
 | New server fields and features | ongoing | Unknown proto fields are ignored. Public structs are `#[non_exhaustive]` or builder-only. Options are builder methods. |
-| Model-based testing against TLA+ | 2 | The core is pure and deterministic, so traces replay into it directly (§11.1). |
+| Model-based testing against TLA+ | 1 (done) | The core is pure and deterministic, so traces replay into it directly (§11.1). |
 
 General rules that keep this true:
 - No public struct with public fields that might grow, unless it's `#[non_exhaustive]`.
@@ -1215,7 +1215,7 @@ General rules that keep this true:
 ### 11.1 Unit tests
 
 - **Core (sans-IO):** table-driven tests feed `Core::step` inputs with a fake clock and assert on events, frames, timers and callbacks. They need no runtime, no sockets and no sleeps. Every bug pattern from §12 that the core can express gets a core-level test.
-- **Model-based (phase 2):** replay TLC traces of the SDK TLA+ model (`MC_*` configs) into the core and check that each modelled step produces the outputs the model expects. Every `bug_*` config must be impossible in the core.
+- **Model-based (done in phase 1):** `cargo xtask tla-traces` simulates the SDK TLA+ model (the stream-subscription `MC_*` configs) under `tests/tla/Replay.tla`, which only narrows the generated schedules to the ones this SDK implements (flows start eagerly once connected, queued deliveries first, no optimistic subscribes). `machine/replay.rs` replays every trace into the core step by step and checks states, events (with publication offsets and payloads, so a wrong delta base shows), commands, callbacks and timers. TLC's counterexample of each relevant `bug_*` config is replayed too and must diverge, at the bug's step. The traces are committed, so CI runs this without the model.
 - **Dispatcher and fast path:** `WouldDeadlock` detection for every row of the §9.5 table, in both `EventDelivery` modes and on both runtime flavours (`current_thread`, `multi_thread`).
 
 - Codecs:

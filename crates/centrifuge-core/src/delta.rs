@@ -187,7 +187,7 @@ fn exec(out: &mut Vec<u8>, origin: &[u8], delta: &[u8], mut i: usize) {
 }
 
 /// The input read as big-endian `u32` words, zero padded, summed modulo 2^32.
-fn checksum(b: &[u8]) -> u32 {
+pub(crate) fn checksum(b: &[u8]) -> u32 {
     let mut sum: u32 = 0;
     let mut chunks = b.chunks_exact(4);
     for w in &mut chunks {

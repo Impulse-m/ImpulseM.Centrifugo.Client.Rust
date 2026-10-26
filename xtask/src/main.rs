@@ -3,24 +3,31 @@
 //! - `proto`: regenerate `crates/centrifuge-core/src/proto/generated.rs` from
 //!   `crates/centrifuge-core/proto/client.proto`. Needs `protoc` on `PATH`.
 //!   The output is committed, so users never need `protoc`.
+//! - `tla-traces`: generate the TLA+ traces the core replays (see `tla.rs`).
 
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI
+
+mod tla;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    if let Some("proto") = std::env::args().nth(1).as_deref() {
-        match proto() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("xtask proto: {e}");
-                ExitCode::FAILURE
-            }
+    let task = std::env::args().nth(1);
+    let res = match task.as_deref() {
+        Some("proto") => proto(),
+        Some("tla-traces") => tla::traces(&workspace_root()),
+        _ => {
+            eprintln!("usage: cargo xtask <proto|tla-traces>");
+            return ExitCode::FAILURE;
         }
-    } else {
-        eprintln!("usage: cargo xtask proto");
-        ExitCode::FAILURE
+    };
+    match res {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("xtask {}: {e}", task.unwrap_or_default());
+            ExitCode::FAILURE
+        }
     }
 }
 

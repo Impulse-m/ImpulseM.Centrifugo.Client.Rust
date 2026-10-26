@@ -43,6 +43,17 @@ impl H {
         })
     }
 
+    /// HTTP-streaming: commands may reach the server out of order.
+    fn emulation() -> Self {
+        let mut h = Self::json();
+        h.core = Core::new(CoreConfig {
+            protocol: h.core.protocol(),
+            transports: vec![TransportKind::HttpStream],
+            ..CoreConfig::default()
+        });
+        h
+    }
+
     /// One step, then the driver's follow-ups: the delivery ack (handlers ran
     /// fine) and every queued delivery.
     fn step(&mut self, input: Input) {
@@ -134,7 +145,9 @@ impl H {
         self.op(Op::Connect);
         let t = self.last_open().transport;
         self.step(Input::Opened { transport: t });
-        let cmds = self.take_commands();
+        let mut cmds = self.take_commands();
+        // Over emulation the connect is the stream request's body.
+        cmds.extend(self.last_open().initial.clone());
         let connect = cmds
             .iter()
             .find(|c| c.connect.is_some())
@@ -873,9 +886,30 @@ fn live_publication_dedupe_and_other_stream_publications() {
     );
 }
 
+/// Over WebSocket the server handles commands in order: the unsubscribe goes
+/// at once, and so does the next subscribe (TLA+ `Ordered`).
+#[test]
+fn unsubscribe_while_subscribe_in_flight_goes_at_once_in_order() {
+    let mut h = H::json();
+    h.new_sub(1, SubConfig::new("ch"));
+    h.op(Op::Subscribe(1));
+    let t = h.connect();
+    let first = subscribe_cmd(&h.take_commands()).id;
+    h.op(Op::Unsubscribe(1));
+    let cmds = h.take_commands();
+    assert!(cmds[0].unsubscribe.is_some(), "at once");
+    h.op(Op::Subscribe(1));
+    let second = subscribe_cmd(&h.take_commands()).id;
+    // The first subscribe's reply is stale.
+    h.reply(t, subscribe_ok(first, proto::SubscribeResult::default()));
+    assert_eq!(h.core.subs[&1].state, SubState::Subscribing);
+    h.reply(t, subscribe_ok(second, proto::SubscribeResult::default()));
+    assert_eq!(h.core.subs[&1].state, SubState::Subscribed);
+}
+
 #[test]
 fn unsubscribe_while_subscribe_in_flight_is_deferred_and_next_subscribe_waits() {
-    let mut h = H::json();
+    let mut h = H::emulation();
     h.new_sub(1, SubConfig::new("ch"));
     h.op(Op::Subscribe(1));
     let t = h.connect();
@@ -916,7 +950,7 @@ fn unsubscribe_while_subscribe_in_flight_is_deferred_and_next_subscribe_waits() 
 
 #[test]
 fn replace_subscription_waits_for_old_unsubscribe() {
-    let mut h = H::json();
+    let mut h = H::emulation();
     h.new_sub(1, SubConfig::new("ch"));
     h.op(Op::Subscribe(1));
     let t = h.connect();
