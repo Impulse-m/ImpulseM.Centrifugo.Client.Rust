@@ -1,6 +1,6 @@
 # centrifuge-client: planned public API
 
-Status: draft, 2026-10-26. Derived from [`spec.md`](spec.md) §4–§5, §7, §9, §10.
+Status: implemented (phase 1), 2026-10-27. Derived from [`spec.md`](spec.md) §4–§5, §7, §9, §10.
 
 This is the whole public surface of `centrifuge-client` (imported as `centrifuge`) on one page, for comparing the implementation against. Behaviour lives in the spec. When the two disagree, the spec wins, and this page gets fixed. Signatures are the design target and may still change when the code reads better (`impl Into<Bytes>` vs `Bytes`, etc.).
 
@@ -10,13 +10,13 @@ Builder options are methods, not public struct fields (C-STRUCT-PRIVATE). Every 
 
 ```rust
 impl Client {                               // Clone + Send + Sync; clones share one connection
-    pub fn builder(endpoint: impl IntoUrl) -> ClientBuilder;            // ws(s):// → WebSocket, http(s):// → HTTP-streaming
+    pub fn builder(endpoint: impl Into<String>) -> ClientBuilder;       // ws(s):// → WebSocket, http(s):// → HTTP-streaming; checked by build()
     pub fn builder_with_transports(list: impl IntoIterator<Item = TransportEndpoint>) -> ClientBuilder; // fallback, in order
 
     // State changes: never wait. state() reflects them at once; the SDK applies them right after.
     pub fn connect(&self) -> Result<(), Error>;          // Err(ClientClosed) only after close()
     pub fn disconnect(&self);
-    pub fn close(&self) -> impl Future<Output = ()> + 'static; // starts closing when called; await = wait for completion
+    pub fn close(&self) -> impl Future<Output = ()> + Send + 'static; // starts closing when called; await = wait for completion
     pub fn state(&self) -> State;                        // Disconnected | Connecting | Connected | Closed
     pub async fn ready(&self, timeout: Option<Duration>) -> Result<(), Error>; // fails at once when disconnected
 
@@ -63,7 +63,7 @@ impl Client {                               // Clone + Send + Sync; clones share
     pub fn on_leave       (&self, f: impl FnMut(&Client, ServerLeaveEvent)        + MaybeSend + 'static);
 
     // Streams (hand-off delivery: an item counts as delivered when next() takes it)
-    pub fn events(&self) -> impl Stream<Item = ClientEvent> + FusedStream;
+    pub fn events(&self) -> EventStream<ClientEvent>;     // Stream + FusedStream + Unpin
 }
 
 impl ClientBuilder {
@@ -79,7 +79,7 @@ impl ClientBuilder {
     pub fn version(self, v: impl Into<String>) -> Self;                // ≤ 64 chars
     pub fn http_headers(self, h: http::HeaderMap) -> Self;             // managed headers (Host, Upgrade, …) rejected
     pub fn emulated_headers(self, h: HashMap<String, String>) -> Self;
-    pub fn emulation_endpoint(self, url: impl IntoUrl) -> Self;        // default: /emulation on the stream's origin
+    pub fn emulation_endpoint(self, url: impl Into<String>) -> Self;   // default: /emulation on the stream's origin
     pub fn timeout(self, d: Duration) -> Self;                         // 5 s
     pub fn handshake_timeout(self, d: Duration) -> Self;               // 5 s
     pub fn min_reconnect_delay(self, d: Duration) -> Self;             // 500 ms
@@ -122,8 +122,9 @@ impl Subscription {                         // Clone + Send + Sync
     pub fn on_join        (&self, f: impl FnMut(&Subscription, JoinEvent)              + MaybeSend + 'static);
     pub fn on_leave       (&self, f: impl FnMut(&Subscription, LeaveEvent)             + MaybeSend + 'static);
 
-    pub fn events(&self) -> impl Stream<Item = SubscriptionEvent> + FusedStream;
-    pub fn publications(&self) -> impl Stream<Item = PublicationEvent> + FusedStream;
+    pub fn client(&self) -> &Client;
+    pub fn events(&self) -> EventStream<SubscriptionEvent>;
+    pub fn publications(&self) -> EventStream<PublicationEvent>;
 }
 
 impl SubscriptionBuilder {
@@ -214,12 +215,12 @@ pub enum Error {
 }
 pub enum TokenError { Unauthorized, Other(BoxError) }    // not std::error::Error, so that `?` works in getters
 
-pub struct ClientError { pub kind: ClientErrorKind, pub source: Option<BoxError> }
+pub struct ClientError { pub kind: ClientErrorKind, pub message: String, pub source: Option<ArcError> }   // Clone
 pub enum ClientErrorKind {
     Transport { transport: TransportKind, status: Option<u16> }, ConnectToken, Connect, Refresh,
     Configuration, Protocol, Delta { channel: String, offset: u64 }, HandlerPanicked,
 }
-pub struct SubscriptionError { pub kind: SubscriptionErrorKind, pub source: Option<BoxError> }
+pub struct SubscriptionError { pub kind: SubscriptionErrorKind, pub message: String, pub source: Option<ArcError> }
 pub enum SubscriptionErrorKind { Subscribe, Token, GetState, Refresh, Configuration }
 ```
 
@@ -227,7 +228,7 @@ pub enum SubscriptionErrorKind { Subscribe, Token, GetState, Refresh, Configurat
 
 ```rust
 pub enum TransportKind { WebSocket, HttpStream }
-impl TransportEndpoint { pub fn websocket(url: impl IntoUrl) -> Self; pub fn http_stream(url: impl IntoUrl) -> Self; }
+impl TransportEndpoint { pub fn websocket(url: impl Into<String>) -> Self; pub fn http_stream(url: impl Into<String>) -> Self; }
 pub enum EventDelivery { Thread, Inline }
 pub enum Protocol { Protobuf, Json }
 pub enum DeltaType { Fossil }
@@ -236,7 +237,7 @@ pub enum ProxyConfig {
     None, FromEnv, System,                                   // System: env vars, then OS settings (default)
     Http { url: Url, auth: Option<ProxyAuth> },
     Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool },
-    Custom(Arc<dyn Fn(&Url) -> Option<ProxyTarget> + MaybeSend + MaybeSync>),
+    Custom(Arc<dyn Fn(&Url) -> ProxyTarget + Send + Sync>),   // ProxyConfig::custom(|url| …)
 }
 pub struct ProxyAuth { pub username: String, pub password: String }   // Debug redacts the password
 pub enum ProxyTarget { Direct, Http { url: Url, auth: Option<ProxyAuth> }, Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool } }
