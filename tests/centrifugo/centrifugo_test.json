@@ -1,0 +1,79 @@
+{
+  "client": {
+    "insecure": true,
+    "concurrency": 8,
+    "token": {
+      "hmac_secret_key": "secret"
+    }
+  },
+  "log": {
+    "level": "debug"
+  },
+  "http_stream": {
+    "enabled": true
+  },
+  "http_api": {
+    "key": "test-api-key"
+  },
+  "channel": {
+    "without_namespace": {
+      "presence": true,
+      "join_leave": true,
+      "force_push_join_leave": true,
+      "allowed_delta_types": ["fossil"],
+      "delta_publish": true,
+      "history_size": 100,
+      "history_ttl": "300s",
+      "force_recovery": true
+    },
+    "namespaces": [
+      {
+        "name": "recovery",
+        "force_recovery": true,
+        "history_size": 100,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      },
+      {
+        "name": "smallhistory",
+        "force_recovery": true,
+        "history_size": 2,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      },
+      {
+        "name": "positioned",
+        "force_positioning": true,
+        "history_size": 100,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      },
+      {
+        "name": "delta",
+        "allowed_delta_types": ["fossil"],
+        "delta_publish": true,
+        "force_recovery": true,
+        "history_size": 100,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      },
+      {
+        "name": "tagged",
+        "allow_tags_filter": true,
+        "history_size": 100,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      },
+      {
+        "name": "nohistory",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      }
+    ]
+  }
+}

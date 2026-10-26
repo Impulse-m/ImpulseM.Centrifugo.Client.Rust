@@ -1,0 +1,20 @@
+[package]
+name = "centrifuge-core"
+description = "Sans-IO protocol state machine behind centrifuge-client. Not a stable API: use centrifuge-client."
+documentation = "https://docs.rs/centrifuge-core"
+readme = "README.md"
+keywords = ["centrifugo", "centrifuge", "sans-io"]
+categories = ["network-programming"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No IO, no runtime, no clock: builds for every target, wasm32-unknown-unknown
+# included (checked in CI). Dependencies must keep it that way (docs/spec.md §9.11).
+[dependencies]
+
+[lints]
+workspace = true

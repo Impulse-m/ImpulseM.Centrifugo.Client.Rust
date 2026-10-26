@@ -1,0 +1,75 @@
+# Automated releases with release-plz (https://release-plz.dev).
+#
+# 1. Every push to main updates a "release PR". It bumps the version from
+#    conventional commits (checked with cargo-semver-checks) and updates
+#    CHANGELOG.md.
+# 2. Merging that PR publishes to crates.io via trusted publishing (OIDC, no
+#    token secret), then creates the git tag and the GitHub release.
+#
+# One-time setup is described in CONTRIBUTING.md ("Release setup").
+name: Release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release:
+    name: Release
+    if: github.repository_owner == 'centrifugal'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write      # tag and GitHub release
+      pull-requests: read  # find the merged release PR
+      id-token: write      # crates.io trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No build cache here: a poisoned cache must not reach a published crate.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-pr:
+    name: Release PR
+    if: github.repository_owner == 'centrifugal'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      # A GitHub App token, not GITHUB_TOKEN: PRs opened with GITHUB_TOKEN
+      # don't trigger CI, so the release PR would have no checks.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          # release-plz pushes the release branch with these credentials.
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

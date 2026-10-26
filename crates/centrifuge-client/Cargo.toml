@@ -1,0 +1,27 @@
+[package]
+name = "centrifuge-client"
+description = "Real-time client SDK for Centrifugo and Centrifuge: WebSocket and HTTP-streaming, subscriptions, recovery"
+documentation = "https://docs.rs/centrifuge-client"
+readme = "../../README.md"
+keywords = ["centrifugo", "centrifuge", "websocket", "realtime", "pubsub"]
+categories = ["network-programming", "web-programming::websocket", "asynchronous"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+# Users write `use centrifuge::Client` (docs/spec.md §3.1).
+name = "centrifuge"
+
+[dependencies]
+centrifuge-core.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

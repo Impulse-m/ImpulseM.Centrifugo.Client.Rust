@@ -1,0 +1,40 @@
+[workspace]
+# Publish only when a release PR is merged, not on every push to main.
+release_always = false
+# Fail the release PR when the version bump is too small for the API change.
+semver_check = true
+pr_labels = ["release"]
+
+# The two crates are released together with one version (docs/spec.md §3.1):
+# one tag, one GitHub release and one changelog, all from centrifuge-client.
+[[package]]
+name = "centrifuge-client"
+version_group = "centrifuge"
+changelog_path = "./CHANGELOG.md"
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+
+[[package]]
+name = "centrifuge-core"
+version_group = "centrifuge"
+# Internal crate: no stability promise outside what the client re-exports,
+# and the client's semver check covers the re-exported types.
+semver_check = false
+changelog_update = false
+git_tag_enable = false
+git_release_enable = false
+
+[changelog]
+protect_breaking_commits = true
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^revert", group = "Reverted" },
+  { message = "^docs", group = "Documentation" },
+  # Not user-facing, including release-plz's own "chore: release" commits.
+  { message = "^(test|ci|build|chore)", skip = true },
+  { message = ".*", group = "Other" },
+]
