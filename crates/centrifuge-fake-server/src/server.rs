@@ -605,29 +605,50 @@ pub(crate) fn handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Ou
     if hold {
         return vec![];
     }
-    let cid = cmd.id;
     if let Some(action) = hook.and_then(|h| h(&received)) {
-        return match action {
-            Action::Reply(mut r) => {
-                r.id = cid;
-                if r.connect.is_some() {
-                    mark_connected(inner, id, r.connect.as_ref());
-                }
-                vec![Out::Replies(vec![r])]
-            }
-            Action::Error {
-                code,
-                message,
-                temporary,
-            } => vec![Out::Replies(vec![error_reply(
-                cid, code, &message, temporary,
-            )])],
-            Action::NoReply => vec![],
-            Action::Disconnect { code, reason } => vec![Out::Close(code, reason)],
-            Action::Frames(frames) => frames.into_iter().map(Out::Replies).collect(),
-        };
+        return act(inner, id, cmd, action);
     }
     default_handle(inner, id, cmd)
+}
+
+fn act(inner: &Arc<Inner>, id: u64, cmd: proto::Command, action: Action) -> Vec<Out> {
+    let cid = cmd.id;
+    match action {
+        Action::Delay(d, then) => {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(d).await;
+                let outs = match then {
+                    Some(a) => act(&inner, id, cmd, *a),
+                    None => default_handle(&inner, id, cmd),
+                };
+                let st = inner.st();
+                if let Some(c) = st.conns.get(&id) {
+                    for o in outs {
+                        let _ = c.tx.send(o);
+                    }
+                }
+            });
+            vec![]
+        }
+        Action::Reply(mut r) => {
+            r.id = cid;
+            if r.connect.is_some() {
+                mark_connected(inner, id, r.connect.as_ref());
+            }
+            vec![Out::Replies(vec![r])]
+        }
+        Action::Error {
+            code,
+            message,
+            temporary,
+        } => vec![Out::Replies(vec![error_reply(
+            cid, code, &message, temporary,
+        )])],
+        Action::NoReply => vec![],
+        Action::Disconnect { code, reason } => vec![Out::Close(code, reason)],
+        Action::Frames(frames) => frames.into_iter().map(Out::Replies).collect(),
+    }
 }
 
 fn mark_connected(inner: &Inner, id: u64, res: Option<&proto::ConnectResult>) {

@@ -80,6 +80,8 @@ pub enum Action {
     Disconnect { code: u32, reason: String },
     /// Send these frames as they are (adversarial orders), each one frame.
     Frames(Vec<Vec<proto::Reply>>),
+    /// The default handling (or another action), after a delay.
+    Delay(Duration, Option<Box<Action>>),
 }
 
 impl Action {
