@@ -862,11 +862,11 @@ They apply to client-side and server-side subscriptions alike (patterns 77, 78):
 - On a subscribe/connect reply:
   - **Only a recoverable reply sets a position.** If `reply.recoverable` is false, the stored position is dropped and the recover flag cleared. Otherwise a `since` or `get_state` subscription to a channel without recovery would ask to recover, and report `recovered = false`, on every resubscribe (centrifuge-js #436, centrifuge-csharp A9).
   - Adopt the reply's epoch only if `reply.epoch != ""` or the stored epoch is empty. An empty reply epoch means the server has no stream position right now, so keep the known one.
-  - **With recovered publications**, the stored offset stays the one the subscribe asked for. It advances per delivered publication, and takes the reply's offset only after the last recovered publication is delivered. Taking the reply's offset (the stream top) up front would mark undelivered publications as delivered (pattern 68), and the dedupe below would then drop every recovered publication.
-  - **Without publications**, take the reply's offset at once.
-  - `subscribed.stream_position` reports the reply's position (the top). Apps that checkpoint should checkpoint from delivered publications, not from this field, which the docs say.
+  - **Take the reply's offset at once**, as centrifuge-js `_setSubscribed` does. After a successful recovery the server replies with the offset the client asked to recover from (`res.Offset = req.Offset` in `centrifuge` `client.go`), and the recovered publications then move it forward as they're delivered. Without recovery the reply has no publications and its offset is the stream top.
+  - **The position never moves backward.** A publication delivered from a reply (e.g. initial state from a subscribe proxy) moves the offset only to `max(stored, pub.offset)`.
+  - `subscribed.stream_position` reports the reply's position. After a recovery that's the position recovered from, not the top. Apps that checkpoint should checkpoint from delivered publications, which the docs say.
 - The position moves **when the publication is delivered** (§9.4: its handler returned, or a stream consumer took it), and only for publications that are actually delivered (patterns 16, 68). Nothing the handler asks for runs before that commit, so a resubscribe started from the handler recovers *after* this publication (pattern 56). A publication that arrives while the subscription isn't `subscribed` is dropped and doesn't move the position.
-- **Defensive dedupe:** a publication of the subscription's own stream with `0 < offset <= committed offset` in the same epoch is a duplicate (the committed offset is the last *delivered* one, never a reply's top). It's dropped and logged at `warn`. The server shouldn't send one (TLA+ server spec), but delivering it twice would break exactly-once for the app.
+- **Defensive dedupe:** a *live* publication of the subscription's own stream with `0 < offset <= committed offset` in the same epoch is a duplicate (the committed offset is the last delivered one, or the reply's). It's dropped and logged at `warn`. Publications carried in a subscribe reply aren't deduplicated; the server already merged them. The server shouldn't send one (TLA+ server spec), but delivering it twice would break exactly-once for the app.
 - `unsubscribe()` keeps the position. `since` in the config seeds it for the first subscribe.
 - **Join and leave** pushes, like publications, are delivered only while `subscribed` in the current `sub_session`. Any other push for a subscription that isn't subscribed is dropped (centrifuge-go E3, centrifuge-python F6).
 
@@ -1316,7 +1316,7 @@ A seeded random-operations runner against the fake server: random `connect`, `di
 | TLA+ property | Spec rules | Tests |
 |---|---|---|
 | `LegalEvents` | One event per state change, none without one (§6.1, §7.1); event order inside a step (§6.1) | I1, I7; model-based replay (§11.1) |
-| `ExactlyOnce` | Commit on delivery, reply position after recovered delivery, dedupe on the committed offset, other-stream publications ignored (§7.4, §9.4) | I8 |
+| `ExactlyOnce` | Commit on delivery, reply position taken at once and never moved backward, dedupe of live publications on the committed offset, other-stream publications ignored (§7.4, §9.4) | I8 |
 | `NoStalePublication` | `transport_id`, `sub_session`, delivery only while subscribed (§7.4, §9.2) | I8, late-frame probes (§11.2) |
 | `DeltaBase` | Base reset per subscribe, first publication full, negotiated decoding (§7.5) | delta chaos, fdelta vectors |
 | `NoSubscribeOfSubscribedChannel` | Per-channel unsubscribe bookkeeping, unsubscribe deferral (§7.3) | replace/toggle probes; no 105 in real-server runs |
@@ -1399,7 +1399,7 @@ Review the rest again whenever a transport or a subscription kind is added. The 
 | 8 | Calls fail fast only where TLA+ says so; calls from a `disconnected` handler wait for the next connect by design (§9.3) |
 | 9, 42 | Refreshes scoped to `conn_generation` / `sub_session` (§6.6, §7.6) |
 | 14 | Close and read errors of a transport the SDK closed are dropped by `transport_id` and never emit `error` (§6.5) |
-| 15, 16, 18, 21, 56, 68, 81 | Serial inbound items, transport tags, pending deliveries before inbound, commit on delivery, reply position taken after recovered delivery (§7.4, §9.2, §9.4) |
+| 15, 16, 18, 21, 56, 68, 81 | Serial inbound items, transport tags, pending deliveries before inbound, commit on delivery, position never moved backward (§7.4, §9.2, §9.4) |
 | 19, 70 | Panics caught in handlers, the `error` handler, callbacks and the core step; reader/writer `JoinError` is terminal and visible (§7.2, §9.2, §9.4) |
 | 22, 57, 58, 82, 36 | Token and state invalidation rules (§6.5, §6.6, §7.1, §7.2, §7.7) |
 | 24, 25, 71, 72, 73 | Byte-stream reassembly with growable buffer and caps, JSON line cap, blank lines skipped, decode errors before the first message are transport failures, synchronous teardown (§5.3, §5.7) |
