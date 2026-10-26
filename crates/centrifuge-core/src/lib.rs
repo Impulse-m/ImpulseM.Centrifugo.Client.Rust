@@ -9,5 +9,14 @@
 //! The design is in
 //! [`docs/spec.md` §9](https://github.com/centrifugal/centrifuge-rust/blob/main/docs/spec.md).
 
+pub mod codec;
+pub mod codes;
+pub mod delta;
+pub mod filter;
+pub mod proto;
+pub mod types;
+
+pub use bytes::Bytes;
+
 /// Version of this crate, as published on crates.io.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

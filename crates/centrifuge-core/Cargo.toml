@@ -11,10 +11,25 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+include = ["/src", "/proto", "/Cargo.toml", "/README.md"]
 
 # No IO, no runtime, no clock: builds for every target, wasm32-unknown-unknown
 # included (checked in CI). Dependencies must keep it that way (docs/spec.md §9.11).
 [dependencies]
+bytes = "1.12"
+prost = { version = "0.14.4", default-features = false, features = ["std", "derive"] }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.140", features = ["raw_value"], optional = true }
+
+[dev-dependencies]
+hex = "0.4"
+proptest = "1"
+
+[features]
+default = ["json"]
+# The JSON protocol codec. Protobuf is always available: its types are the
+# core's wire model.
+json = ["dep:serde", "dep:serde_json"]
 
 [lints]
 workspace = true

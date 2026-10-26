@@ -1,0 +1,4 @@
+# `unwrap_used` is denied in library code (see [workspace.lints]); tests may unwrap.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
