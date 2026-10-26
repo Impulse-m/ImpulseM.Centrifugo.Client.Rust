@@ -12,6 +12,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# The integration tests need the (unpublished) fake server.
+exclude = ["/tests"]
+
 [lib]
 # Users write `use centrifuge::Client` (docs/spec.md §3.1).
 name = "centrifuge"
