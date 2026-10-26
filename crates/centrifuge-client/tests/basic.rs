@@ -11,7 +11,7 @@ mod common;
 
 use std::time::Duration;
 
-use centrifuge::{Error, HistoryOptions, State, SubState};
+use centrifuge::{Error, HistoryOptions, Protocol, State, SubState, TransportKind};
 use common::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -220,4 +220,169 @@ async fn registry() {
     assert_ne!(a, a2);
     client.remove_subscription(&a).unwrap(); // a different object: no-op
     assert!(client.get_subscription("a").is_some());
+}
+
+/// Real HTTP headers go with every request (WebSocket upgrade, HTTP-stream
+/// request, every emulation request); emulated headers go inside the connect
+/// command; `set_*` change them, and the data, from the next attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn headers_emulated_headers_and_data() {
+    for (kind, protocol) in MATRIX {
+        let srv = server().await;
+        let mut h = http::HeaderMap::new();
+        h.insert("x-app", "one".parse().unwrap());
+        let mut eh = std::collections::HashMap::new();
+        eh.insert("Authorization".to_owned(), "Bearer one".to_owned());
+        let client = builder(&srv, kind, protocol)
+            .http_headers(h)
+            .emulated_headers(eh)
+            .data(r#"{"v":1}"#)
+            .build()
+            .unwrap();
+        let sub = client
+            .new_subscription("hd")
+            .data(r#"{"s":1}"#)
+            .build()
+            .unwrap();
+        sub.subscribe();
+        client.connect().unwrap();
+        sub.ready(None).await.unwrap();
+        client.publish("hd", "{}").await.unwrap();
+        // The next attempt's values.
+        let mut h2 = http::HeaderMap::new();
+        h2.insert("x-app", "two".parse().unwrap());
+        client.set_http_headers(h2).unwrap();
+        let mut eh2 = std::collections::HashMap::new();
+        eh2.insert("Authorization".to_owned(), "Bearer two".to_owned());
+        client.set_emulated_headers(eh2).unwrap();
+        client.set_data(r#"{"v":2}"#).unwrap();
+        sub.set_data(r#"{"s":2}"#).unwrap();
+        srv.terminate();
+        srv.wait_until(|s| (s.connects() == 2).then_some(())).await;
+        sub.ready(Some(Duration::from_secs(3))).await.unwrap();
+        client.publish("hd", "{}").await.unwrap();
+
+        let reqs = srv.requests();
+        let values: Vec<(String, String)> = reqs
+            .iter()
+            .map(|(p, h)| {
+                (
+                    p.clone(),
+                    h.get("x-app")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-")
+                        .to_owned(),
+                )
+            })
+            .collect();
+        assert!(
+            values.iter().all(|(_, v)| v == "one" || v == "two"),
+            "{kind:?}: every request has the header: {values:?}"
+        );
+        assert!(values.iter().any(|(_, v)| v == "two"), "{values:?}");
+        if kind == TransportKind::HttpStream {
+            assert!(values.iter().any(|(p, _)| p == "/emulation"), "{values:?}");
+        }
+        let connects: Vec<_> = srv
+            .commands()
+            .into_iter()
+            .filter_map(|c| c.connect)
+            .collect();
+        assert_eq!(
+            connects[0].headers.get("Authorization").map(String::as_str),
+            Some("Bearer one")
+        );
+        assert_eq!(
+            connects[1].headers.get("Authorization").map(String::as_str),
+            Some("Bearer two")
+        );
+        assert_eq!(&connects[0].data[..], br#"{"v":1}"#);
+        assert_eq!(&connects[1].data[..], br#"{"v":2}"#);
+        let subs: Vec<_> = srv
+            .commands()
+            .into_iter()
+            .filter_map(|c| c.subscribe)
+            .collect();
+        assert_eq!(&subs[0].data[..], br#"{"s":1}"#, "{kind:?} {protocol:?}");
+        assert_eq!(&subs.last().unwrap().data[..], br#"{"s":2}"#);
+        client.close().await;
+    }
+}
+
+/// `get_state` is asked before a subscribe without a position; its position is
+/// used to recover.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_state_position_is_used() {
+    let srv = server().await;
+    for _ in 0..3 {
+        srv.publish("gs", r#"{"n":1}"#);
+    }
+    let epoch_tx = srv.stream_position("gs").1;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let c = calls.clone();
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Json)
+        .build()
+        .unwrap();
+    let (r, mut ev) = recorder();
+    let sub = record_sub(
+        client
+            .new_subscription("gs")
+            .recoverable(true)
+            .get_state(move |ctx| {
+                assert_eq!(ctx.channel, "gs");
+                c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let epoch = epoch_tx.clone();
+                async move { Ok(centrifuge::StreamPosition::new(2, epoch)) }
+            }),
+        &r,
+    )
+    .build()
+    .unwrap();
+    sub.subscribe();
+    client.connect().unwrap();
+    assert_eq!(
+        ev.wait("subscribed").await,
+        "subscribed recovered=true pos=Some(2)"
+    );
+    assert_eq!(
+        ev.wait("pub").await,
+        r#"pub 3 {"n":1}"#,
+        "only the publication after the loaded position"
+    );
+    let s = srv.last_subscribe().unwrap();
+    assert!(s.recover && s.offset == 2);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // A reconnect recovers from what was delivered, without asking again.
+    srv.terminate();
+    sub.ready(Some(Duration::from_secs(3))).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(srv.last_subscribe().unwrap().offset, 3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    client.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn join_and_leave() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::HttpStream, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    let (r, mut ev) = recorder();
+    let sub = record_sub(client.new_subscription("jl").join_leave(true), &r)
+        .build()
+        .unwrap();
+    sub.subscribe();
+    client.connect().unwrap();
+    sub.ready(None).await.unwrap();
+    assert!(srv.last_subscribe().unwrap().join_leave);
+    let info = centrifuge_fake_server::proto::ClientInfo {
+        user: "u".into(),
+        client: "c-9".into(),
+        ..Default::default()
+    };
+    srv.join("jl", info.clone());
+    srv.leave("jl", info);
+    assert_eq!(ev.wait("join").await, "join c-9");
+    assert_eq!(ev.wait("leave").await, "leave c-9");
+    client.close().await;
 }

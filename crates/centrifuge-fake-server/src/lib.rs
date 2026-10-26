@@ -185,6 +185,8 @@ pub(crate) struct St {
     pub(crate) channels: HashMap<String, Channel>,
     pub(crate) faults: Faults,
     pub(crate) connects: usize,
+    /// Every HTTP request: path and headers (upgrades, streams, emulation).
+    pub(crate) requests: Vec<(String, hyper::HeaderMap)>,
     pub(crate) next_epoch: u64,
 }
 
@@ -255,6 +257,7 @@ impl FakeServer {
                 channels: HashMap::new(),
                 faults: Faults::default(),
                 connects: 0,
+                requests: Vec::new(),
                 next_epoch: 1,
             }),
             version: watch::Sender::new(0),
@@ -593,6 +596,12 @@ impl FakeServer {
     /// Commands matching `pred`.
     pub fn count(&self, pred: impl Fn(&Received) -> bool) -> usize {
         self.inner.st().received.iter().filter(|r| pred(r)).count()
+    }
+
+    /// Every HTTP request received: path and headers (WebSocket upgrades,
+    /// HTTP-stream requests, emulation requests), in order.
+    pub fn requests(&self) -> Vec<(String, hyper::HeaderMap)> {
+        self.inner.st().requests.clone()
     }
 
     /// Open connections.

@@ -24,3 +24,15 @@ services:
       - "8012:8000"
     volumes:
       - ./tests/centrifugo/centrifugo_secure_test.json:/centrifugo/config.json:ro
+
+  # Centrifugo PRO for channel compaction tests: `docker compose --profile pro up -d`.
+  centrifugo_pro:
+    image: centrifugo/centrifugo-pro:v6.10.2
+    profiles: ["pro"]
+    command:
+      - centrifugo
+      - --config=/centrifugo/config.json
+    ports:
+      - "8014:8000"
+    volumes:
+      - ./tests/centrifugo/centrifugo_pro_test.json:/centrifugo/config.json:ro

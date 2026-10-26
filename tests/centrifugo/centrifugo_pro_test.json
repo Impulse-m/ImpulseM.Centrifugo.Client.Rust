@@ -1,0 +1,27 @@
+{
+  "client": {
+    "insecure": true
+  },
+  "log": {
+    "level": "info"
+  },
+  "http_stream": {
+    "enabled": true
+  },
+  "http_api": {
+    "key": "test-api-key"
+  },
+  "channel": {
+    "namespaces": [
+      {
+        "name": "compact",
+        "allow_channel_compaction": true,
+        "force_recovery": true,
+        "history_size": 100,
+        "history_ttl": "300s",
+        "allow_subscribe_for_client": true,
+        "allow_publish_for_subscriber": true
+      }
+    ]
+  }
+}

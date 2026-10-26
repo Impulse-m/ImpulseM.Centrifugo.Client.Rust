@@ -62,6 +62,10 @@ pub(crate) async fn accept(listener: TcpListener, inner: Weak<Inner>) {
 }
 
 async fn route(inner: Arc<Inner>, req: Request<Incoming>) -> Response<Body> {
+    inner
+        .st()
+        .requests
+        .push((req.uri().path().to_owned(), req.headers().clone()));
     match req.uri().path() {
         WS_PATH => websocket(inner, req).await,
         HTTP_STREAM_PATH => http_stream(inner, req).await,

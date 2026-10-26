@@ -95,10 +95,11 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: docker compose up -d --wait
+      - run: docker compose --profile pro up -d --wait
       - run: cargo test -p centrifuge-client --test real_server --locked
         env:
           CENTRIFUGO_TESTS: "1"
+          CENTRIFUGO_PRO_TESTS: "1"
       - if: failure()
         run: docker compose logs --tail 200
 

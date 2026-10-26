@@ -344,3 +344,92 @@ async fn real_tokens() {
         assert!(e.starts_with("disconnected 3500"), "{e}");
     }
 }
+
+/// Channel compaction (Centrifugo PRO, `docker compose --profile pro up -d`,
+/// `CENTRIFUGO_PRO_TESTS=1`): pushes carry the numeric id negotiated at
+/// subscribe instead of the channel name, over both transports, across a
+/// reconnect with recovery. A forwarder records what the server sends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_pro_channel_compaction() {
+    const PRO: &str = "localhost:8014";
+    init_tracing();
+    if std::env::var_os("CENTRIFUGO_PRO_TESTS").is_none() {
+        eprintln!("skipped: set CENTRIFUGO_PRO_TESTS=1 with `docker compose --profile pro up -d`");
+        return;
+    }
+    for kind in [TransportKind::WebSocket, TransportKind::HttpStream] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let s = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (c, _) = listener.accept().await.unwrap();
+                let up = tokio::net::TcpStream::connect(PRO).await.unwrap();
+                let s = s.clone();
+                tokio::spawn(async move {
+                    let (mut cr, mut cw) = c.into_split();
+                    let (mut ur, mut uw) = up.into_split();
+                    let down = async {
+                        let mut buf = [0u8; 8192];
+                        while let Ok(n) = ur.read(&mut buf).await {
+                            if n == 0 || cw.write_all(&buf[..n]).await.is_err() {
+                                break;
+                            }
+                            s.lock().unwrap().extend_from_slice(&buf[..n]);
+                        }
+                    };
+                    let _ = tokio::join!(tokio::io::copy(&mut cr, &mut uw), down);
+                });
+            }
+        });
+        let ch = unique("compact:c");
+        let (r, mut ev) = recorder();
+        let client = builder(&format!("127.0.0.1:{port}"), kind, Protocol::Json)
+            .build()
+            .unwrap();
+        let sub = record_sub(client.new_subscription(&ch).recoverable(true), &r)
+            .build()
+            .unwrap();
+        sub.subscribe();
+        client.connect().unwrap();
+        sub.ready(Some(Duration::from_secs(5))).await.unwrap();
+        let publish = |n: u32| {
+            let ch = ch.clone();
+            async move {
+                let r = api(
+                    PRO,
+                    "publish",
+                    serde_json::json!({ "channel": ch, "data": { "n": n } }),
+                )
+                .await;
+                assert!(r.get("error").is_none(), "{r}");
+            }
+        };
+        publish(1).await;
+        assert_eq!(ev.wait("pub").await, r#"pub 1 {"n":1}"#, "{kind:?}");
+        // Recovery after a reconnect: the subscribe negotiates a new id.
+        client.disconnect();
+        publish(2).await;
+        publish(3).await;
+        client.connect().unwrap();
+        assert_eq!(
+            ev.wait("subscribed").await,
+            "subscribed recovered=true pos=Some(1)"
+        );
+        assert_eq!(ev.wait("pub").await, r#"pub 2 {"n":2}"#);
+        assert_eq!(ev.wait("pub").await, r#"pub 3 {"n":3}"#);
+        publish(4).await;
+        assert_eq!(ev.wait("pub").await, r#"pub 4 {"n":4}"#);
+        client.close().await;
+        let wire = String::from_utf8_lossy(&seen.lock().unwrap()).to_string();
+        assert!(
+            wire.contains(r#""push":{"id":"#),
+            "{kind:?}: no compacted push on the wire"
+        );
+        let live = wire
+            .matches(&format!(r#""push":{{"channel":"{ch}""#))
+            .count();
+        assert_eq!(live, 0, "{kind:?}: pushes still carry the channel name");
+    }
+}
