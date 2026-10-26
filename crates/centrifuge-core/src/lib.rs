@@ -13,6 +13,7 @@ pub mod codec;
 pub mod codes;
 pub mod delta;
 pub mod filter;
+pub mod machine;
 pub mod proto;
 pub mod types;
 
