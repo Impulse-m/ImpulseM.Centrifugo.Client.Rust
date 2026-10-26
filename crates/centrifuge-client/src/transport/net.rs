@@ -375,19 +375,27 @@ impl Net {
                     .ok_or_else(|| NetError::new("proxy URL has no host"))?
                     .to_owned();
                 let pport = purl.port_or_known_default().unwrap_or(1080);
-                let io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
-                let target = if remote_dns {
-                    Target::Domain(host.clone())
+                if remote_dns {
+                    let io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
+                    socks5_connect(io, Target::Domain(host.clone()), port, auth.as_ref()).await?
                 } else {
-                    Target::Ip(
-                        *self
-                            .resolve(&host, port)
-                            .await?
-                            .first()
-                            .ok_or_else(|| NetError::new("no address"))?,
-                    )
-                };
-                socks5_connect(io, target, port, auth.as_ref()).await?
+                    // Every resolved address in turn, one SOCKS session each, as
+                    // a direct connection tries them (e.g. `localhost` → ::1,
+                    // then 127.0.0.1).
+                    let mut last = NetError::new(format!("no address for {host}"));
+                    let mut tunnel = None;
+                    for addr in self.resolve(&host, port).await? {
+                        let io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
+                        match socks5_connect(io, Target::Ip(addr), port, auth.as_ref()).await {
+                            Ok(io) => {
+                                tunnel = Some(io);
+                                break;
+                            }
+                            Err(e) => last = e,
+                        }
+                    }
+                    tunnel.ok_or(last)?
+                }
             }
         };
         if secure {
