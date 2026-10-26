@@ -1021,7 +1021,13 @@ impl Core {
             }
             _ => {}
         }
-        self.graced.remove(&key);
+        // A command keeps its mark until it ends (reply, timeout, teardown):
+        // the busy-connection grace below counts too, so it's granted once
+        // (sdk_validation chaos-fake seed 195: re-granted on every fire, an
+        // unanswered subscribe stayed pending forever while pings arrived).
+        if !matches!(key, TimerKey::Command(_)) {
+            self.graced.remove(&key);
+        }
         match key {
             TimerKey::Reconnect => self.start_attempt(now, out),
             TimerKey::Open => self.on_open_timeout(now, out),
@@ -1055,6 +1061,7 @@ impl Core {
                 return;
             }
         }
+        self.graced.remove(&TimerKey::Command(id));
         let Some(p) = self.pending.remove(&id) else {
             return;
         };

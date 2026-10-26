@@ -664,3 +664,61 @@ async fn terminal_disconnect_push_on_connect() {
         );
     }
 }
+
+/// A subscribe that gets no reply times out and reconnects the client (the
+/// server state is unknown), then the subscription is subscribed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_timeout_reconnects() {
+    for (kind, protocol) in MATRIX {
+        let srv = server().await;
+        let (r, mut ev) = recorder();
+        let client = record_client(
+            builder(&srv, kind, protocol).timeout(Duration::from_millis(500)),
+            &r,
+        )
+        .build()
+        .unwrap();
+        client.connect().unwrap();
+        client.ready(None).await.unwrap();
+        ev.wait("connected").await;
+        srv.hold_replies(true);
+        let sub = record_sub(client.new_subscription("held"), &r)
+            .build()
+            .unwrap();
+        sub.subscribe();
+        srv.wait_for(|r| r.command.subscribe.is_some()).await;
+        srv.hold_replies(false);
+        let e = ev.wait("connecting").await;
+        assert!(e.starts_with("connecting 3 "), "{kind:?} {protocol:?}: {e}");
+        sub.ready(Some(Duration::from_secs(3))).await.unwrap();
+        client.close().await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn subscribe_timeout_reconnects_inline() {
+    let srv = server().await;
+    let (r, mut ev) = recorder();
+    let client = record_client(
+        builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
+            .timeout(Duration::from_millis(500))
+            .event_delivery(centrifuge::EventDelivery::Inline),
+        &r,
+    )
+    .build()
+    .unwrap();
+    client.connect().unwrap();
+    client.ready(None).await.unwrap();
+    ev.wait("connected").await;
+    srv.hold_replies(true);
+    let sub = record_sub(client.new_subscription("held"), &r)
+        .build()
+        .unwrap();
+    sub.subscribe();
+    srv.wait_for(|r| r.command.subscribe.is_some()).await;
+    srv.hold_replies(false);
+    let e = ev.wait("connecting").await;
+    assert!(e.starts_with("connecting 3 "), "{e}");
+    sub.ready(Some(Duration::from_secs(3))).await.unwrap();
+    client.close().await;
+}

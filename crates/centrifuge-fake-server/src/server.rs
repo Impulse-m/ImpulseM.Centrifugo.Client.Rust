@@ -653,7 +653,10 @@ fn act(inner: &Arc<Inner>, id: u64, cmd: proto::Command, action: Action) -> Vec<
 
 fn mark_connected(inner: &Inner, id: u64, res: Option<&proto::ConnectResult>) {
     let mut st = inner.st();
-    st.connects += 1;
+    // A (delayed) connect reply for a connection already gone counts for nothing.
+    if st.conns.contains_key(&id) {
+        st.connects += 1;
+    }
     if let Some(c) = st.conns.get_mut(&id) {
         c.connected = true;
         if let Some(r) = res {

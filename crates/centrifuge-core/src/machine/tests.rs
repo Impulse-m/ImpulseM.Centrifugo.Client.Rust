@@ -493,6 +493,43 @@ fn liveness_counts_received_data_not_processed_data() {
     assert_eq!(h.core.state(), State::Connected);
 }
 
+/// The busy-connection grace of a command timeout is granted once: a server
+/// that keeps pinging can't keep an unanswered subscribe pending forever
+/// (found by sdk_validation chaos-fake, seed 195).
+#[test]
+fn command_timeout_grace_while_data_arrives_is_granted_once() {
+    let mut h = H::json();
+    h.new_sub(1, SubConfig::new("ch"));
+    h.op(Op::Subscribe(1));
+    h.connect();
+    let id = subscribe_cmd(&h.take_commands()).id;
+    h.take_events();
+    let key = TimerKey::Command(id);
+    for round in 0..2 {
+        let at = h.deadline(key);
+        h.now = at;
+        // A server ping arrived just before: data keeps flowing.
+        h.step(Input::TimerFired {
+            key,
+            late: false,
+            last_received: at.checked_sub(Duration::from_millis(100)),
+        });
+        if round == 0 {
+            assert_eq!(
+                h.core.state(),
+                State::Connected,
+                "one grace while data arrives"
+            );
+        }
+    }
+    assert_eq!(
+        h.core.state(),
+        State::Connecting,
+        "the subscribe timed out: reconnect (the server state is unknown)"
+    );
+    assert!(names(&h.take_events()).iter().any(|e| e == "connecting(3)"));
+}
+
 #[test]
 fn late_timer_gets_one_grace_period() {
     let mut h = H::json();
