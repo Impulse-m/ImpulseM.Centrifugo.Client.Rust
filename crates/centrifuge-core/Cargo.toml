@@ -22,8 +22,15 @@ serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.140", features = ["raw_value"], optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 hex = "0.4"
 proptest = "1"
+serde_json = "1.0.140"
+
+[[bench]]
+name = "codec"
+harness = false
+required-features = ["json"]
 
 [features]
 default = ["json"]

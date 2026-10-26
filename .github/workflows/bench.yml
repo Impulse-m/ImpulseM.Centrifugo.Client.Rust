@@ -1,0 +1,51 @@
+name: Benchmarks
+
+# Codec, stream reassembly and delta benchmarks of a PR against its base
+# (docs/spec.md §11.1). Shared runners are noisy: the comparison is reported in
+# the job summary, never a failure.
+on:
+  pull_request:
+    paths:
+      - "crates/centrifuge-core/**"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: |
+          git worktree add --detach ../base "$BASE"
+          (cd ../base && cargo bench -p centrifuge-core --bench codec -- --save-baseline base --warm-up-time 1 --measurement-time 3)
+          mkdir -p target/criterion && cp -r ../base/target/criterion/. target/criterion/
+      - name: This branch
+        run: cargo bench -p centrifuge-core --bench codec -- --baseline base --warm-up-time 1 --measurement-time 3 | tee bench.txt
+      - name: Summary
+        run: |
+          {
+            echo '## Benchmarks against the base (informational; regressions over 10 % flagged)'
+            echo '```'
+            grep -E '^[a-z].*/|time:|change:' bench.txt || true
+            echo '```'
+            if grep -q 'regressed' bench.txt; then echo ':warning: some benchmarks regressed'; fi
+          } >> "$GITHUB_STEP_SUMMARY"

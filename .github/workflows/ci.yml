@@ -78,6 +78,8 @@ jobs:
       - run: cargo test --workspace --all-features --locked
         env:
           RUSTFLAGS: -D warnings
+      - run: cargo bench --workspace --no-run --locked
+        if: matrix.os == 'ubuntu-latest' && matrix.toolchain == 'stable'
 
   # Against real Centrifugo (docker-compose.yml, docs/spec.md §11.4).
   real-server:
