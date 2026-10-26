@@ -385,3 +385,24 @@ async fn tls_untrusted_certificate_is_refused() {
         Err(Error::Configuration(_))
     ));
 }
+
+/// `set_proxy()` applies from the next connect attempt (an app setting
+/// changed, or the laptop moved to a network that needs a proxy).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_proxy_applies_to_the_next_attempt() {
+    let srv = server().await;
+    let (port, seen) = http_proxy(None).await;
+    let client = Client::builder(srv.ws_url())
+        .proxy(ProxyConfig::None)
+        .min_reconnect_delay(Duration::from_millis(50))
+        .build()
+        .unwrap();
+    client.connect().unwrap();
+    client.ready(Some(Duration::from_secs(3))).await.unwrap();
+    assert_eq!(seen.connects.load(Ordering::SeqCst), 0);
+    client.set_proxy(ProxyConfig::Http { url: format!("http://127.0.0.1:{port}").parse().unwrap(), auth: None }).unwrap();
+    srv.terminate();
+    srv.wait_until(|s| (s.connects() == 2).then_some(())).await;
+    assert_eq!(seen.connects.load(Ordering::SeqCst), 1, "the reconnect went through the proxy");
+    client.close().await;
+}
