@@ -1,5 +1,12 @@
 //! Connect, subscribe, publications and calls over every transport and codec.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)] // test code
+
 mod common;
 
 use std::time::Duration;

@@ -1,5 +1,11 @@
 //! Shared helpers for the fake-server tests.
-#![allow(dead_code, unreachable_pub, unused_imports)]
+#![allow(
+    dead_code,
+    unreachable_pub,
+    unused_imports,
+    clippy::expect_used,
+    clippy::unwrap_used
+)]
 
 use std::time::Duration;
 

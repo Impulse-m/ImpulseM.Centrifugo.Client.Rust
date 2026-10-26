@@ -1,6 +1,13 @@
 //! Reconnects, recovery, fallback, tokens, server-side subscriptions,
 //! re-entrancy and streams against the fake server.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)] // test code
+
 mod common;
 
 use std::sync::Arc;

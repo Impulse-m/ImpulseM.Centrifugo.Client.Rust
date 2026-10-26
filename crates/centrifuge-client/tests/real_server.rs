@@ -2,6 +2,13 @@
 //! then `CENTRIFUGO_TESTS=1 cargo test --test real_server`. Skipped without
 //! the variable.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)] // test code
+
 mod common;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -279,7 +286,7 @@ async fn real_tags_filter() {
     client.close().await;
 }
 
-/// Connection token with a short expiry: refreshed through get_token; a
+/// Connection token with a short expiry: refreshed through `get_token`; a
 /// private channel needs a subscription token.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_tokens() {
