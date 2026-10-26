@@ -133,30 +133,36 @@ pub fn encode_commands(
     out: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
     let start = out.len();
-    let res = (|| {
-        for (i, cmd) in commands.iter().enumerate() {
-            match protocol {
-                Protocol::Protobuf => {
-                    cmd.encode_length_delimited(out)
-                        .expect("a Vec<u8> grows as needed");
-                }
-                #[cfg(feature = "json")]
-                Protocol::Json => {
-                    if i > 0 {
-                        out.push(b'\n');
-                    }
-                    json::encode_command(cmd, out)?;
-                }
-            }
-            #[cfg(not(feature = "json"))]
-            let _ = i;
-        }
-        Ok(())
-    })();
+    let res = encode_into(protocol, commands, out);
     if res.is_err() {
         out.truncate(start);
     }
     res
+}
+
+fn encode_into(
+    protocol: Protocol,
+    commands: &[proto::Command],
+    out: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    for (i, cmd) in commands.iter().enumerate() {
+        match protocol {
+            Protocol::Protobuf => {
+                cmd.encode_length_delimited(out)
+                    .expect("a Vec<u8> grows as needed");
+            }
+            #[cfg(feature = "json")]
+            Protocol::Json => {
+                if i > 0 {
+                    out.push(b'\n');
+                }
+                json::encode_command(cmd, out)?;
+            }
+        }
+        #[cfg(not(feature = "json"))]
+        let _ = i;
+    }
+    Ok(())
 }
 
 /// Encodes an emulation request carrying an already encoded command frame
