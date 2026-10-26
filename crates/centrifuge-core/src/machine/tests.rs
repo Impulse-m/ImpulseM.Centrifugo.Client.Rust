@@ -389,6 +389,35 @@ fn server_disconnect_reconnect_vs_terminal() {
     assert_eq!(names(&h.take_events()), ["disconnected(3501)"]);
 }
 
+/// HTTP-streaming reports a refused connect (invalid token) with a disconnect
+/// push before EOF, not a close code: honored while connecting, no retry loop.
+#[test]
+fn disconnect_push_while_connecting_is_honored() {
+    let mut h = H::json();
+    h.op(Op::Connect);
+    let t = h.last_open().transport;
+    h.step(Input::Opened { transport: t });
+    h.take_events();
+    h.push(
+        t,
+        proto::Push {
+            disconnect: Some(proto::Disconnect {
+                code: 3500,
+                reason: "invalid token".into(),
+                reconnect: false,
+            }),
+            ..Default::default()
+        },
+    );
+    h.step(Input::Closed {
+        transport: t,
+        reason: CloseReason::Eof,
+    });
+    assert_eq!(names(&h.take_events()), ["disconnected(3500)"]);
+    assert_eq!(h.core.state(), State::Disconnected);
+    assert!(h.core.next_deadline().is_none(), "no reconnect scheduled");
+}
+
 #[test]
 fn close_frame_codes_below_3000_reconnect_and_1009_stops() {
     let mut h = H::json();

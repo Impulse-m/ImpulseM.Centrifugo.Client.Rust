@@ -607,6 +607,13 @@ impl Core {
             return;
         };
         if self.state != State::Connected {
+            // A disconnect push is how HTTP-streaming reports a refused
+            // connect (e.g. an invalid token): honored while connecting too,
+            // and, like a close code, it proves the transport works.
+            if self.state == State::Connecting && push.disconnect.is_some() {
+                self.conn.transport_was_open = true;
+                self.on_push(transport, push, now, out);
+            }
             return;
         }
         self.on_push(transport, push, now, out);

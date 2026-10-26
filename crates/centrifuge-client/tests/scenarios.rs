@@ -620,3 +620,40 @@ fn build_without_runtime_fails() {
     let r = Client::builder("ws://localhost:1/connection/websocket").build();
     assert!(matches!(r, Err(Error::Configuration(_))));
 }
+
+/// A terminal disconnect push in reply to connect (invalid token) over
+/// HTTP-streaming: the server sends the push, then EOF.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_disconnect_push_on_connect() {
+    for (kind, protocol) in MATRIX {
+        let srv = server().await;
+        srv.on_command(|r| {
+            r.command.connect.is_some().then(|| Action::Disconnect {
+                code: 3500,
+                reason: "invalid token".into(),
+            })
+        });
+        let (r, mut ev) = recorder();
+        let client = record_client(builder(&srv, kind, protocol), &r)
+            .build()
+            .unwrap();
+        client.connect().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let all = ev.drain();
+        let e = all
+            .iter()
+            .find(|e| e.starts_with("disconnected"))
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            e, "disconnected 3500 invalid token",
+            "{kind:?} {protocol:?}: {all:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            srv.count(|r| r.command.connect.is_some()),
+            1,
+            "{kind:?} {protocol:?}"
+        );
+    }
+}
