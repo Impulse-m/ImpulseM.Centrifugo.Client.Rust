@@ -28,7 +28,7 @@ Most tests need no server: they use the in-process fake server (`crates/centrifu
 
 ```sh
 docker compose up -d                     # insecure on :8010, secure (tokens required) on :8012
-docker compose --profile pro up -d       # also Centrifugo PRO on :8014 (channel compaction)
+docker compose --profile pro up -d       # also Centrifugo PRO on :8014 (channel compaction; local only, not in CI)
 CENTRIFUGO_TESTS=1 CENTRIFUGO_PRO_TESTS=1 cargo test -p centrifuge-client --test real_server
 docker compose --profile pro down
 ```
@@ -88,7 +88,7 @@ Nobody runs `cargo publish` by hand, except for the first publish below.
 
 ### Release setup (one time, maintainers)
 
-1. **First publish.** crates.io trusted publishing can't create a new crate, so publish `0.0.1` of both crates once by hand, core first:
+1. **First publish.** crates.io trusted publishing can't create a new crate, so publish the first version of both crates once by hand (`0.1.0`, or a `0.0.1` name reservation if it isn't published yet), core first:
    `cargo publish -p centrifuge-core && cargo publish -p centrifuge-client` with a short-lived crates.io token, then revoke the token.
 2. **Trusted publisher.** On crates.io, for **both** `centrifuge-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`.
 3. **GitHub environment.** Create an environment named `release` (Settings → Environments). Optionally restrict it to the `main` branch and add required reviewers.

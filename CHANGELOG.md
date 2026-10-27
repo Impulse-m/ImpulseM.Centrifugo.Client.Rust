@@ -8,6 +8,23 @@ This file is updated by [release-plz](https://release-plz.dev) from conventional
 
 ## [Unreleased]
 
+## [0.1.0]
+
+The first usable release: phase 1 of [`docs/spec.md`](docs/spec.md).
+
+### Added
+
+- `Client` with connect, disconnect, close, states and events (handlers or `Stream`s); automatic reconnect with jittered backoff; ping/pong liveness; system sleep detection.
+- Transports: WebSocket and HTTP-streaming with bidirectional emulation, with fallback between them; captive-portal detection.
+- Protocols: Protobuf (default) and JSON.
+- Connection and subscription tokens with `get_token` and refresh; connect and subscribe `data` with `set_data()`; real HTTP headers and emulated headers.
+- Client-side subscriptions: positioned and recoverable streams with exactly-once delivery across reconnects, `since` and `get_state`, join/leave, fossil delta compression, server-side tags filters, channel compaction (Centrifugo PRO).
+- Server-side subscriptions; async server messages.
+- Calls: publish, RPC, send, history, presence, presence stats (waiting for the connection while connecting); typed JSON helpers (feature `serde`).
+- Proxies: HTTP(S) CONNECT and SOCKS5 with auth, environment variables, OS settings (macOS, Windows), per-endpoint decisions; TLS with the OS trust store and extra roots.
+- `statistics()`, `WeakClient`, `EventDelivery::{Thread, Inline}`, `WouldDeadlock` detection for calls from handlers.
+- Examples, benchmarks, a TLA+ model trace replay of the core.
+
 ## [0.0.1]
 
 ### Added

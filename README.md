@@ -18,7 +18,7 @@ The official Rust real-time client SDK for [Centrifugo](https://centrifugal.dev)
 
 ```toml
 [dependencies]
-centrifuge-client = "0.0.1"
+centrifuge-client = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
