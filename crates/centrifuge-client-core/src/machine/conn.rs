@@ -976,6 +976,16 @@ impl Core {
             }
             self.conn.token_expires_at = Some(exp.checked_sub(slept).unwrap_or(now));
         }
+        // Token refresh deadlines are wall-clock time in effect: what the sleep
+        // used up comes off them (a refresh due during the sleep runs now).
+        for key in self.timers.keys() {
+            if matches!(key, TimerKey::Refresh | TimerKey::SubRefresh(_)) {
+                if let Some(at) = self.timers.deadline(key) {
+                    let earlier = at.checked_sub(slept).unwrap_or(now).max(now);
+                    self.timers.arm(key, earlier);
+                }
+            }
+        }
         if self.state == State::Connected {
             if let Some(window) = self.conn.ping_window {
                 if slept >= window {

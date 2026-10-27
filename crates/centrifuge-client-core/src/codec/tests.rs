@@ -39,6 +39,33 @@ mod json {
         );
     }
 
+    /// The server splits a JSON frame at every newline byte: a pretty-printed
+    /// payload must not break its command (newlines outside strings are plain
+    /// whitespace; inside strings JSON escapes them).
+    #[test]
+    fn pretty_printed_payload_stays_on_one_line() {
+        let data = Bytes::from_static(b"{\n  \"text\": \"a\\nb\",\r\n  \"n\": 1\n}");
+        let cmd = proto::Command {
+            id: 1,
+            publish: Some(proto::PublishRequest {
+                channel: "c".into(),
+                data,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = encode(&[cmd.clone(), cmd]);
+        let lines: Vec<&str> = s.split('\n').collect();
+        assert_eq!(lines.len(), 2, "{s}");
+        for l in lines {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            assert_eq!(
+                v["publish"]["data"],
+                serde_json::json!({ "text": "a\nb", "n": 1 })
+            );
+        }
+    }
+
     #[test]
     fn pong_is_an_empty_object_and_batches_join_with_newline() {
         let s = encode(&[proto::Command::default(), sub_cmd(2, "a")]);

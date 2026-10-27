@@ -1,5 +1,6 @@
 //! Step-level tests of the core: no runtime, no sockets, a fake clock.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -553,6 +554,82 @@ fn system_sleep_past_the_ping_window_reconnects_at_once() {
     assert_eq!(names(&h.take_events()), ["connecting(1)"]);
 }
 
+/// After a system sleep, refresh deadlines move earlier by the time slept: the
+/// token expired in wall-clock time meanwhile.
+#[test]
+fn refresh_deadlines_move_earlier_after_a_sleep() {
+    let mut h = H::new(CoreConfig {
+        token: "t".into(),
+        has_get_token: true,
+        ..CoreConfig::default()
+    });
+    h.connect_with(proto::ConnectResult {
+        client: "c".into(),
+        expires: true,
+        ttl: 40,
+        ping: 25,
+        pong: true,
+        ..Default::default()
+    });
+    let before = h.deadline(TimerKey::Refresh);
+    h.step(Input::Resumed {
+        slept: Duration::from_secs(20),
+    });
+    assert_eq!(
+        h.deadline(TimerKey::Refresh),
+        before - Duration::from_secs(20)
+    );
+    // Shorter than the ping window (25 + 10 s): still connected, refresh due.
+    h.step(Input::Resumed {
+        slept: Duration::from_secs(30),
+    });
+    assert_eq!(h.core.state(), State::Connected);
+    assert!(h.deadline(TimerKey::Refresh) <= h.now, "due now");
+}
+
+/// The defensive dedupe of live publications (§7.4) covers server-side
+/// subscriptions too: an offset already delivered isn't delivered again.
+#[test]
+fn server_side_live_publication_dedupe() {
+    let mut h = H::json();
+    let mut subs = HashMap::new();
+    subs.insert(
+        "s1".to_owned(),
+        proto::SubscribeResult {
+            recoverable: true,
+            positioned: true,
+            epoch: "e".into(),
+            offset: 5,
+            ..Default::default()
+        },
+    );
+    let t = h.connect_with(proto::ConnectResult {
+        client: "c".into(),
+        subs,
+        ..Default::default()
+    });
+    h.take_events();
+    for offset in [5, 6, 6] {
+        h.push(
+            t,
+            proto::Push {
+                channel: "s1".into(),
+                r#pub: Some(publication(offset, b"{}")),
+                ..Default::default()
+            },
+        );
+    }
+    let offsets: Vec<u64> = h
+        .take_events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::ServerPublication { publication, .. } => Some(publication.offset),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(offsets, [6], "5 was the reply's position, 6 arrives once");
+}
+
 #[test]
 fn late_timer_gets_one_grace_period() {
     let mut h = H::json();
@@ -1006,6 +1083,35 @@ fn unsubscribe_while_subscribe_in_flight_is_deferred_and_next_subscribe_waits() 
         "subscribes once the unsubscribe was answered"
     );
     assert_eq!(h.core.subs[&1].state, SubState::Subscribing);
+}
+
+/// Over emulation: a write failure of the subscribe whose unsubscribe is
+/// deferred clears the deferral (TLA+ `Env_WriteError`: nothing to undo), so a
+/// later subscribe of the channel isn't stuck.
+#[test]
+fn write_failure_of_a_deferred_subscribe_clears_the_deferral() {
+    let mut h = H::emulation();
+    h.new_sub(1, SubConfig::new("ch"));
+    h.op(Op::Subscribe(1));
+    let t = h.connect();
+    let first = subscribe_cmd(&h.take_commands()).id;
+    h.op(Op::Unsubscribe(1));
+    assert!(h.take_commands().is_empty(), "deferred");
+    h.step(Input::WriteFailed {
+        transport: t,
+        command_ids: vec![first],
+        had_pong: false,
+    });
+    h.op(Op::Subscribe(1));
+    let cmds = h.take_commands();
+    assert!(
+        cmds.iter().any(|c| c.subscribe.is_some()),
+        "the channel isn't left waiting for the failed subscribe: {cmds:?}"
+    );
+    assert!(
+        cmds.iter().all(|c| c.unsubscribe.is_none()),
+        "nothing to undo"
+    );
 }
 
 #[test]

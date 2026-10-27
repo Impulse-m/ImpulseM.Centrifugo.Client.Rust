@@ -524,7 +524,18 @@ fn raw<'a>(field: &'static str, b: &'a Bytes) -> Result<Option<&'a RawValue>, En
 /// Encodes one command as a single JSON line (no trailing newline).
 pub(crate) fn encode_command(cmd: &proto::Command, out: &mut Vec<u8>) -> Result<(), EncodeError> {
     let j = JCommand::from_proto(cmd)?;
-    serde_json::to_writer(out, &j).map_err(|e| EncodeError::Json(e.to_string()))
+    let start = out.len();
+    serde_json::to_writer(&mut *out, &j).map_err(|e| EncodeError::Json(e.to_string()))?;
+    // The server splits frames at newlines. serde_json escapes them inside
+    // strings, so a raw one comes from a (pretty-printed) payload, where it's
+    // whitespace: a space keeps the JSON equal and the command on one line.
+    let line = &mut out[start..];
+    if line.iter().any(|b| matches!(b, b'\n' | b'\r')) {
+        for b in line.iter_mut().filter(|b| matches!(b, b'\n' | b'\r')) {
+            *b = b' ';
+        }
+    }
+    Ok(())
 }
 
 /// Encodes an emulation request: the encoded command frame travels as a JSON

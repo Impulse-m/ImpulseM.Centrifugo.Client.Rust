@@ -142,7 +142,21 @@ impl Core {
             self.server_subs.remove(&channel);
             out.event(Event::ServerUnsubscribed { channel });
         } else if let Some(p) = push.r#pub {
-            if p.offset > 0 && (p.channel.is_empty() || p.channel == channel) {
+            let own_stream = p.channel.is_empty() || p.channel == channel;
+            // Defensive dedupe, as for client-side subscriptions (§7.4): a live
+            // publication at or below the committed offset of the same epoch
+            // was delivered already.
+            let duplicate = self.server_subs.get(&channel).is_some_and(|s| {
+                s.has_position()
+                    && own_stream
+                    && p.offset > 0
+                    && p.offset <= s.offset
+                    && (p.epoch.is_empty() || p.epoch == s.epoch)
+            });
+            if duplicate {
+                return;
+            }
+            if p.offset > 0 && own_stream {
                 let epoch = (!p.epoch.is_empty()).then(|| p.epoch.clone());
                 self.commits.push(super::Commit::Server {
                     channel: channel.clone(),

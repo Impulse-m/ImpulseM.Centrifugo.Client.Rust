@@ -1130,10 +1130,15 @@ impl Core {
                 }
                 Pending::Subscribe {
                     sub,
+                    channel,
                     attempt,
                     generation,
-                    ..
                 } => {
+                    // Never reached the server: a deferred unsubscribe of it
+                    // has nothing to undo (TLA+ `Env_WriteError`).
+                    if generation == self.generation {
+                        self.settle_outdated_subscribe(&channel, *id, false, now, out);
+                    }
                     self.on_subscribe_write_failed(sub, attempt, generation, now, out);
                 }
                 Pending::Unsubscribe {

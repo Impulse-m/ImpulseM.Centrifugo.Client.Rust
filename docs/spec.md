@@ -908,6 +908,7 @@ When the subscribe reply carries `id > 0`, pushes for that subscription arrive w
 ## 8. Server-side subscriptions
 
 - They're created from `connect.subs` and from `subscribe` pushes, and removed by `unsubscribe` pushes and by absence from a later connect reply.
+- **The defensive dedupe of live publications (§7.4) applies to server-side subscriptions too:** one at or below the committed offset of the same epoch is dropped.
 - **Any unsubscribe push removes a server-side subscription, whatever its code** (2500+ and 2502 included). The client can't resubscribe it (TLA+ decision).
 - Registry entries hold `(offset, epoch, recoverable)`. On reconnect, recoverable entries go into `ConnectRequest.subs` with `recover: true`.
 - When the client leaves `connected`, emit `subscribing(channel)` for each entry. Entries are kept.

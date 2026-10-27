@@ -46,7 +46,16 @@ impl Timers {
     }
 
     pub(crate) fn arm_after(&mut self, key: TimerKey, now: Instant, d: Duration) {
-        self.arm(key, now + d);
+        // Saturating: a huge duration means "practically never", not a panic.
+        let at = now
+            .checked_add(d)
+            .unwrap_or_else(|| now + Duration::from_secs(100 * 365 * 24 * 3600));
+        self.arm(key, at);
+    }
+
+    /// The keys armed, for re-arming after a system sleep.
+    pub(crate) fn keys(&self) -> Vec<TimerKey> {
+        self.by_key.keys().copied().collect()
     }
 
     pub(crate) fn cancel(&mut self, key: TimerKey) {
@@ -55,7 +64,6 @@ impl Timers {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn deadline(&self, key: TimerKey) -> Option<Instant> {
         self.by_key.get(&key).map(|(at, _)| *at)
     }

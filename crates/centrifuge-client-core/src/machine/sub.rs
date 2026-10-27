@@ -606,7 +606,7 @@ impl Core {
 
     /// A subscribe reply of a flow that is no longer current: only its deferred
     /// unsubscribe matters (§7.2, §7.3).
-    fn settle_outdated_subscribe(
+    pub(super) fn settle_outdated_subscribe(
         &mut self,
         channel: &str,
         cmd_id: u32,
