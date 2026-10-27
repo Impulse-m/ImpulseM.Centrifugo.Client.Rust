@@ -181,10 +181,10 @@ async fn http_connect_proxy_with_basic_auth() {
     let srv = server().await;
     // "user:secret" in base64.
     let (port, seen) = http_proxy(Some("dXNlcjpzZWNyZXQ=")).await;
-    let proxy = ProxyConfig::Http {
-        url: format!("http://127.0.0.1:{port}").parse().unwrap(),
-        auth: Some(ProxyAuth::new("user", "secret")),
-    };
+    let proxy = ProxyConfig::http(
+        format!("http://127.0.0.1:{port}").parse().unwrap(),
+        Some(ProxyAuth::new("user", "secret")),
+    );
     for ep in endpoints(&srv, "127.0.0.1") {
         let client = connect_through(ep.clone(), proxy.clone()).await;
         // Calls go through too (emulation POSTs for HTTP-streaming).
@@ -210,10 +210,10 @@ async fn http_connect_proxy_refusal_is_a_transport_error_with_status() {
     let errors = Arc::new(std::sync::Mutex::new(Vec::new()));
     let e = errors.clone();
     let client = Client::builder(srv.ws_url())
-        .proxy(ProxyConfig::Http {
-            url: format!("http://127.0.0.1:{port}").parse().unwrap(),
-            auth: Some(ProxyAuth::new("user", "wrong")),
-        })
+        .proxy(ProxyConfig::http(
+            format!("http://127.0.0.1:{port}").parse().unwrap(),
+            Some(ProxyAuth::new("user", "wrong")),
+        ))
         .min_reconnect_delay(Duration::from_millis(100))
         .on_error(move |_, ev| e.lock().unwrap().push(format!("{:?}", ev.error.kind)))
         .build()
@@ -234,11 +234,11 @@ async fn socks5_proxy_with_auth_and_both_address_types() {
     let srv = server().await;
     let (port, seen) = socks5_proxy(Some(("user", "secret"))).await;
     for remote_dns in [true, false] {
-        let proxy = ProxyConfig::Socks5 {
-            url: format!("socks5://127.0.0.1:{port}").parse().unwrap(),
-            auth: Some(ProxyAuth::new("user", "secret")),
+        let proxy = ProxyConfig::socks5(
+            format!("socks5://127.0.0.1:{port}").parse().unwrap(),
+            Some(ProxyAuth::new("user", "secret")),
             remote_dns,
-        };
+        );
         for ep in endpoints(&srv, "localhost") {
             let client = connect_through(ep, proxy.clone()).await;
             client.rpc("m", r#"{"y":2}"#).await.unwrap();
@@ -259,10 +259,7 @@ async fn custom_proxy_decides_per_endpoint() {
     let proxy_url: url::Url = format!("http://127.0.0.1:{port}").parse().unwrap();
     let proxy = ProxyConfig::custom(move |u| {
         if u.scheme() == "ws" {
-            ProxyTarget::Http {
-                url: proxy_url.clone(),
-                auth: None,
-            }
+            ProxyTarget::http(proxy_url.clone(), None)
         } else {
             ProxyTarget::Direct
         }
@@ -407,10 +404,10 @@ async fn set_proxy_applies_to_the_next_attempt() {
     client.ready(Some(Duration::from_secs(3))).await.unwrap();
     assert_eq!(seen.connects.load(Ordering::SeqCst), 0);
     client
-        .set_proxy(ProxyConfig::Http {
-            url: format!("http://127.0.0.1:{port}").parse().unwrap(),
-            auth: None,
-        })
+        .set_proxy(ProxyConfig::http(
+            format!("http://127.0.0.1:{port}").parse().unwrap(),
+            None,
+        ))
         .unwrap();
     srv.terminate();
     srv.wait_until(|s| (s.connects() == 2).then_some(())).await;
@@ -470,16 +467,13 @@ async fn ipv6_literal_endpoints() {
     let (hp, hseen) = http_proxy(None).await;
     let (sp, sseen) = socks5_proxy(None).await;
     for ep in direct {
-        let http = ProxyConfig::Http {
-            url: format!("http://127.0.0.1:{hp}").parse().unwrap(),
-            auth: None,
-        };
+        let http = ProxyConfig::http(format!("http://127.0.0.1:{hp}").parse().unwrap(), None);
         connect_through(ep.clone(), http).await.close().await;
-        let socks = ProxyConfig::Socks5 {
-            url: format!("socks5://127.0.0.1:{sp}").parse().unwrap(),
-            auth: None,
-            remote_dns: true,
-        };
+        let socks = ProxyConfig::socks5(
+            format!("socks5://127.0.0.1:{sp}").parse().unwrap(),
+            None,
+            true,
+        );
         connect_through(ep, socks).await.close().await;
     }
     let reqs = hseen.requests.lock().unwrap().clone();

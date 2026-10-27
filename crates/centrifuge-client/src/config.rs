@@ -94,12 +94,16 @@ impl std::fmt::Debug for ProxyAuth {
 }
 
 /// Where one connection goes (a resolved proxy decision).
+///
+/// Built with [`ProxyTarget::http`], [`ProxyTarget::socks5`] or
+/// [`ProxyTarget::Direct`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProxyTarget {
     /// No proxy.
     Direct,
     /// Through an HTTP(S) proxy, with a CONNECT tunnel.
+    #[non_exhaustive]
     Http {
         /// The proxy (`http://` or `https://`).
         url: Url,
@@ -107,6 +111,7 @@ pub enum ProxyTarget {
         auth: Option<ProxyAuth>,
     },
     /// Through a SOCKS5 proxy.
+    #[non_exhaustive]
     Socks5 {
         /// The proxy (`socks5://` or `socks5h://`).
         url: Url,
@@ -117,7 +122,43 @@ pub enum ProxyTarget {
     },
 }
 
+impl ProxyTarget {
+    /// Through an HTTP(S) proxy (`http://` or `https://`), with a CONNECT tunnel.
+    #[must_use]
+    pub fn http(url: Url, auth: Option<ProxyAuth>) -> Self {
+        Self::Http { url, auth }
+    }
+
+    /// Through a SOCKS5 proxy; `remote_dns` lets the proxy resolve host names.
+    #[must_use]
+    pub fn socks5(url: Url, auth: Option<ProxyAuth>, remote_dns: bool) -> Self {
+        Self::Socks5 {
+            url,
+            auth,
+            remote_dns,
+        }
+    }
+}
+
+/// A per-endpoint proxy decision function (see [`ProxyConfig::custom`]).
+pub trait ProxyFn: Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync {}
+impl<F: Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync> ProxyFn for F {}
+
+/// The function of [`ProxyConfig::Custom`]: opaque, build it with
+/// [`ProxyConfig::custom`].
+#[derive(Clone)]
+pub struct CustomProxy(pub(crate) Arc<dyn ProxyFn>);
+
+impl std::fmt::Debug for CustomProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CustomProxy(..)")
+    }
+}
+
 /// Proxy configuration (docs/spec.md §5.2).
+///
+/// Built with the unit variants, [`ProxyConfig::http`],
+/// [`ProxyConfig::socks5`] or [`ProxyConfig::custom`].
 #[derive(Clone, Default)]
 #[non_exhaustive]
 pub enum ProxyConfig {
@@ -130,6 +171,7 @@ pub enum ProxyConfig {
     #[default]
     System,
     /// Always this HTTP(S) proxy.
+    #[non_exhaustive]
     Http {
         /// The proxy URL.
         url: Url,
@@ -137,6 +179,7 @@ pub enum ProxyConfig {
         auth: Option<ProxyAuth>,
     },
     /// Always this SOCKS5 proxy.
+    #[non_exhaustive]
     Socks5 {
         /// The proxy URL.
         url: Url,
@@ -146,13 +189,31 @@ pub enum ProxyConfig {
         remote_dns: bool,
     },
     /// Decide per endpoint.
-    Custom(Arc<dyn Fn(&Url) -> ProxyTarget + Send + Sync>),
+    Custom(CustomProxy),
 }
 
 impl ProxyConfig {
+    /// Always this HTTP(S) proxy (`http://` or `https://`), with Basic
+    /// credentials if given.
+    #[must_use]
+    pub fn http(url: Url, auth: Option<ProxyAuth>) -> Self {
+        Self::Http { url, auth }
+    }
+
+    /// Always this SOCKS5 proxy; `remote_dns` lets the proxy resolve host
+    /// names.
+    #[must_use]
+    pub fn socks5(url: Url, auth: Option<ProxyAuth>, remote_dns: bool) -> Self {
+        Self::Socks5 {
+            url,
+            auth,
+            remote_dns,
+        }
+    }
+
     /// A custom per-endpoint decision.
     pub fn custom(f: impl Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync + 'static) -> Self {
-        Self::Custom(Arc::new(f))
+        Self::Custom(CustomProxy(Arc::new(f)))
     }
 }
 

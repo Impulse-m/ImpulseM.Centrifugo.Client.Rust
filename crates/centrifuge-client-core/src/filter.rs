@@ -16,6 +16,7 @@ pub struct FilterNode(pub(crate) proto::FilterNode);
 impl FilterNode {
     /// The wire form.
     #[must_use]
+    #[doc(hidden)] // the wire model is an implementation detail
     pub fn to_proto(&self) -> proto::FilterNode {
         self.0.clone()
     }

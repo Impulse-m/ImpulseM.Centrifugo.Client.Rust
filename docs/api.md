@@ -209,7 +209,7 @@ pub enum Error {
     Timeout, ClientDisconnected, ClientClosed, SubscriptionUnsubscribed, DuplicateSubscription,
     Server(ServerError),                                  // code, message, temporary
     InvalidData(String),
-    Transport { status: Option<u16>, message: String },
+    Transport { status: Option<u16>, message: String },  // #[non_exhaustive]
     Configuration(String),
     WouldDeadlock,                                        // spec §9.5
 }
@@ -233,14 +233,19 @@ pub enum EventDelivery { Thread, Inline }
 pub enum Protocol { Protobuf, Json }
 pub enum DeltaType { Fossil }
 
-pub enum ProxyConfig {
+pub enum ProxyConfig {                                       // #[non_exhaustive]
     None, FromEnv, System,                                   // System: env vars, then OS settings (default)
-    Http { url: Url, auth: Option<ProxyAuth> },
-    Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool },
-    Custom(Arc<dyn Fn(&Url) -> ProxyTarget + Send + Sync>),   // ProxyConfig::custom(|url| …)
+    Http { url, auth },                                      // #[non_exhaustive]: build with ProxyConfig::http(url, auth)
+    Socks5 { url, auth, remote_dns },                        // #[non_exhaustive]: ProxyConfig::socks5(url, auth, remote_dns)
+    Custom(CustomProxy),                                     // opaque: ProxyConfig::custom(|url| -> ProxyTarget)
+}
+impl ProxyConfig {
+    pub fn http(url: Url, auth: Option<ProxyAuth>) -> Self;
+    pub fn socks5(url: Url, auth: Option<ProxyAuth>, remote_dns: bool) -> Self;
+    pub fn custom(f: impl Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync + 'static) -> Self;
 }
 pub struct ProxyAuth { pub username: String, pub password: String }   // Debug redacts the password
-pub enum ProxyTarget { Direct, Http { url: Url, auth: Option<ProxyAuth> }, Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool } }
+pub enum ProxyTarget { Direct, Http { .. }, Socks5 { .. } }          // ProxyTarget::http(url, auth), ::socks5(url, auth, remote_dns)
 
 impl TlsConfig {
     pub fn new() -> Self;                                    // OS trust store (rustls-platform-verifier)

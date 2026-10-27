@@ -107,6 +107,7 @@ pub enum SubState {
 #[non_exhaustive]
 pub enum ClientErrorKind {
     /// A transport failed to open, read or write.
+    #[non_exhaustive]
     Transport {
         /// Which transport.
         transport: TransportKind,
@@ -125,6 +126,7 @@ pub enum ClientErrorKind {
     /// the size limit.
     Protocol,
     /// A publication's delta couldn't be applied.
+    #[non_exhaustive]
     Delta {
         /// The channel.
         channel: String,

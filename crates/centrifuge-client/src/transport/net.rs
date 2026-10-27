@@ -245,7 +245,7 @@ impl Net {
                     remote_dns,
                 };
             }
-            ProxyConfig::Custom(f) => return target(f(url)),
+            ProxyConfig::Custom(f) => return target((f.0)(url)),
             ProxyConfig::FromEnv => hyper_util::client::proxy::matcher::Matcher::from_env(),
             ProxyConfig::System => hyper_util::client::proxy::matcher::Matcher::from_system(),
         };

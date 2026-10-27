@@ -39,6 +39,10 @@
 //! # Ok(()) }
 //! ```
 //!
+//! The client runs on Tokio: `build()` takes the current runtime (or the one
+//! given with [`ClientBuilder::runtime`]), and its async methods must be
+//! awaited inside a Tokio runtime.
+//!
 //! See the [README](https://github.com/centrifugal/centrifuge-rust) for a
 //! guide and the [design](https://github.com/centrifugal/centrifuge-rust/blob/main/docs/spec.md)
 //! for the exact behaviour.
@@ -68,8 +72,8 @@ pub use centrifuge_client_core::types::{
 };
 pub use client::{Client, ClientBuilder, ConnectionTokenContext, WeakClient};
 pub use config::{
-    EventDelivery, Protocol, ProxyAuth, ProxyConfig, ProxyTarget, TlsConfig, TransportEndpoint,
-    TransportKind,
+    CustomProxy, EventDelivery, Protocol, ProxyAuth, ProxyConfig, ProxyFn, ProxyTarget, TlsConfig,
+    TransportEndpoint, TransportKind,
 };
 pub use error::{
     ArcError, BoxError, ClientError, ClientErrorKind, Error, ServerError, SubscriptionError,

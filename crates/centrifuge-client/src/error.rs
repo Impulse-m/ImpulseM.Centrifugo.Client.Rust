@@ -30,6 +30,7 @@ pub enum Error {
     /// A payload is invalid for the protocol (the JSON protocol needs valid JSON).
     InvalidData(String),
     /// The transport rejected or failed the request.
+    #[non_exhaustive]
     Transport {
         /// HTTP status, when there was one (e.g. 413 from the emulation endpoint).
         status: Option<u16>,

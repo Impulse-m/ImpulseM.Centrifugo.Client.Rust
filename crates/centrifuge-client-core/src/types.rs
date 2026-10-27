@@ -27,6 +27,7 @@ pub struct ClientInfo {
     pub chan_info: Option<Bytes>,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::ClientInfo> for ClientInfo {
     fn from(i: proto::ClientInfo) -> Self {
         Self {
@@ -61,6 +62,7 @@ impl Publication {
     /// Builds the public publication from a wire one, with `data` already
     /// resolved (delta applied).
     #[must_use]
+    #[doc(hidden)] // the wire model is an implementation detail
     pub fn from_proto(p: proto::Publication, data: Bytes) -> Self {
         Self {
             data,
@@ -161,6 +163,7 @@ impl HistoryOptions {
 
     /// The wire request for `channel`.
     #[must_use]
+    #[doc(hidden)] // the wire model is an implementation detail
     pub fn to_proto(&self, channel: &str) -> proto::HistoryRequest {
         proto::HistoryRequest {
             channel: channel.to_owned(),
@@ -186,6 +189,7 @@ pub struct HistoryResult {
     pub epoch: String,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::HistoryResult> for HistoryResult {
     fn from(h: proto::HistoryResult) -> Self {
         Self {
@@ -211,6 +215,7 @@ pub struct PresenceResult {
     pub clients: HashMap<String, ClientInfo>,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::PresenceResult> for PresenceResult {
     fn from(p: proto::PresenceResult) -> Self {
         Self {
@@ -229,6 +234,7 @@ pub struct PresenceStatsResult {
     pub num_users: u32,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::PresenceStatsResult> for PresenceStatsResult {
     fn from(p: proto::PresenceStatsResult) -> Self {
         Self {
@@ -246,6 +252,7 @@ pub struct RpcResult {
     pub data: Bytes,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::RpcResult> for RpcResult {
     fn from(r: proto::RpcResult) -> Self {
         Self { data: r.data }
@@ -276,6 +283,7 @@ pub struct ServerError {
     pub temporary: bool,
 }
 
+#[doc(hidden)] // the wire model is an implementation detail
 impl From<proto::Error> for ServerError {
     fn from(e: proto::Error) -> Self {
         Self {
