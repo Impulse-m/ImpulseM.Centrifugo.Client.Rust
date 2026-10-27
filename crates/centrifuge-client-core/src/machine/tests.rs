@@ -577,7 +577,7 @@ fn refresh_deadlines_move_earlier_after_a_sleep() {
     });
     assert_eq!(
         h.deadline(TimerKey::Refresh),
-        before - Duration::from_secs(20)
+        before.checked_sub(Duration::from_secs(20)).unwrap()
     );
     // Shorter than the ping window (25 + 10 s): still connected, refresh due.
     h.step(Input::Resumed {
