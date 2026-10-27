@@ -66,6 +66,48 @@ const DROP: &[&str] = &[
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// `cargo xtask tla-check [config...]`: TLC model-checks `ReplaySpec` (the
+/// narrowed schedules) exhaustively against each config's invariants, to show
+/// the narrowing keeps every safety property of the model. Prints one line per
+/// config; fails if any invariant is violated.
+pub(crate) fn check(root: &Path, only: &[String]) -> Res<()> {
+    let model = std::env::var_os("TLA_MODEL")
+        .map_or_else(|| root.join("../centrifugo-pro-source/tla/sdk"), PathBuf::from);
+    let jar = std::env::var_os("TLA2TOOLS").map_or_else(|| model.join("../tla2tools.jar"), PathBuf::from);
+    let work = std::env::temp_dir().join("centrifuge-xtask-tla-check");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work)?;
+    for f in ["SDK.tla", "SDKBase.tla"] {
+        std::fs::copy(model.join(f), work.join(f))?;
+    }
+    std::fs::copy(root.join("crates/centrifuge-core/tests/tla/Replay.tla"), work.join("Replay.tla"))?;
+    let mut failed = Vec::new();
+    for cfg in CONFIGS.iter().filter(|c| only.is_empty() || only.iter().any(|o| o == *c)) {
+        let text = std::fs::read_to_string(model.join("configs").join(format!("{cfg}.cfg")))?;
+        std::fs::write(work.join(format!("{cfg}.cfg")), replay_cfg(&text))?;
+        let started = std::time::Instant::now();
+        let out = Command::new("java")
+            .current_dir(&work)
+            .args(["-XX:+UseParallelGC", "-cp"])
+            .arg(&jar)
+            .args(["tlc2.TLC", "-deadlock", "-workers", "auto", "-config", &format!("{cfg}.cfg"), "-metadir"])
+            .arg(work.join("meta").join(cfg))
+            .arg("Replay.tla")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let states = stdout.lines().find(|l| l.contains("distinct states found")).unwrap_or("").trim().to_owned();
+        let secs = started.elapsed().as_secs();
+        if out.status.success() && stdout.contains("No error has been found") {
+            println!("{cfg}: ok ({states}; {secs} s)");
+        } else {
+            let why = stdout.lines().find(|l| l.starts_with("Error:")).unwrap_or("TLC failed").to_owned();
+            println!("{cfg}: FAILED: {why} ({states}; {secs} s)");
+            failed.push(*cfg);
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(format!("violations in {failed:?}").into()) }
+}
+
 #[allow(clippy::too_many_lines, clippy::similar_names)] // one linear procedure
 pub(crate) fn traces(root: &Path) -> Res<()> {
     let model = std::env::var_os("TLA_MODEL").map_or_else(

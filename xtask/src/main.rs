@@ -4,6 +4,7 @@
 //!   `crates/centrifuge-core/proto/client.proto`. Needs `protoc` on `PATH`.
 //!   The output is committed, so users never need `protoc`.
 //! - `tla-traces`: generate the TLA+ traces the core replays (see `tla.rs`).
+//! - `tla-check [config...]`: model-check the replayed schedules exhaustively.
 
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI
 
@@ -17,8 +18,9 @@ fn main() -> ExitCode {
     let res = match task.as_deref() {
         Some("proto") => proto(),
         Some("tla-traces") => tla::traces(&workspace_root()),
+        Some("tla-check") => tla::check(&workspace_root(), &std::env::args().skip(2).collect::<Vec<_>>()),
         _ => {
-            eprintln!("usage: cargo xtask <proto|tla-traces>");
+            eprintln!("usage: cargo xtask <proto|tla-traces|tla-check [config...]>");
             return ExitCode::FAILURE;
         }
     };

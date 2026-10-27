@@ -1476,6 +1476,29 @@ Settled with the maintainers, 2026-10-26:
 | 19 | No `network_changed()` / `force_reconnect()`: apps call `disconnect(); connect()`, which in phase 2 also resets the fallback | §5.8, §13 |
 | 20 | Built for future work: `centrifuge-core` crate (wasm-checked), `MaybeSend`/`MaybeSync` bounds, the provisions listed in §9.11 | §3.1, §9.11 |
 
+Settled during implementation, 2026-10-27 (reviewed one by one):
+
+| # | Decision | Where |
+|---|---|---|
+| 21 | The unsubscribe deferral applies over emulation only; over WebSocket the unsubscribe goes at once and a later subscribe doesn't wait (TLA+ `Ordered`, centrifuge-js #443) | §7.3 |
+| 22 | `unsubscribe()` while the flow waits for `get_token`/`get_state` sends an unsubscribe command (centrifuge-js `_inflight`, TLA+ `NeedsUnsubCmd`) | §7.3 |
+| 23 | A disconnect push is honoured while connecting, and proves the transport (HTTP-streaming reports a refused connect this way); catalogue pattern 84 | §6.5 |
+| 24 | A 200 HTML response to an HTTP-stream request is a transport failure (captive portal), retried | §5.3 |
+| 25 | HTTP-streaming over HTTP/1.1 only | §5.7 |
+| 26 | TLS through the OS trust store only (`rustls-platform-verifier`), extra roots via `add_root_pem`; no bundled roots | §5.2 |
+| 27 | Error events carry `Arc<dyn Error + Send + Sync>`, so all events are `Clone` | §4.7 |
+| 28 | A panicking handler stops the client visibly; the batch's other events are delivered; its publication isn't committed | §9.4 |
+| 29 | Ops after `close()` are dropped at the handle; `close().await` in a handler returns at once | §4.3 |
+| 30 | `Client::builder(url)` is infallible; `build()` validates | §4.1 |
+| 31 | Emulation POSTs: 404/401/403/3xx/5xx close the transport; other non-2xx fail that request's calls with `Error::Transport` | §5.7 |
+| 32 | A `Subscription` keeps its `Client` alive (strong reference; no cycle through handlers) | §9.8 |
+| 33 | The TLA+ replay narrows the model's schedules to the implemented ones (`tests/tla/Replay.tla`); the narrowed spec is model-checked exhaustively (`cargo xtask tla-check`) | §11.1 |
+| 34 | A system sleep longer than the no-ping window reconnects at once | §9.7 |
+| 35 | SOCKS5 with local DNS tries every resolved address | §5.2 |
+| 36 | Benchmark comparisons go to the PR job summary, not a comment | §11.1 |
+| 37 | Centrifugo PRO (channel compaction) tests run locally only, not in CI | §11.4 |
+| 38 | The first real release is 0.1.0 | §2 |
+
 Still open:
 - Whether the Tauri users' proxies need NTLM or Kerberos (#15).
 
