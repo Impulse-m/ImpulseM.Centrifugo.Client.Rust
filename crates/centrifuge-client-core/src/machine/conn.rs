@@ -971,7 +971,8 @@ impl Core {
     pub(super) fn on_resumed(&mut self, slept: Duration, now: Instant, out: &mut Outputs) {
         // A laptop wake: the monotonic clock didn't move while asleep.
         if let Some(exp) = self.conn.token_expires_at {
-            if exp <= now + slept && self.cfg.has_get_token {
+            // A wall clock that jumped years ahead counts as expired too.
+            if now.checked_add(slept).is_none_or(|t| exp <= t) && self.cfg.has_get_token {
                 self.conn.refresh_required = true;
             }
             self.conn.token_expires_at = Some(exp.checked_sub(slept).unwrap_or(now));

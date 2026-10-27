@@ -58,6 +58,9 @@ pub(crate) struct Net {
     /// At most one DNS lookup in flight per client: a dropped future doesn't
     /// stop a blocking `getaddrinfo` (docs/spec.md §6.2).
     lookup: Mutex<Option<(String, Lookup)>>,
+    /// The whole handshake's timeout; with several addresses, each TCP
+    /// attempt gets a share of it.
+    handshake_timeout: std::time::Duration,
 }
 
 impl std::fmt::Debug for Net {
@@ -161,7 +164,11 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAll {
 }
 
 impl Net {
-    pub(crate) fn new(proxy: ProxyConfig, tls: &TlsConfig) -> Result<Self, crate::Error> {
+    pub(crate) fn new(
+        proxy: ProxyConfig,
+        tls: &TlsConfig,
+        handshake_timeout: std::time::Duration,
+    ) -> Result<Self, crate::Error> {
         let cfg =
             Self::tls_config(tls).map_err(|e| crate::Error::Configuration(format!("TLS: {e}")))?;
         Ok(Self {
@@ -169,6 +176,7 @@ impl Net {
             tls: cfg,
             accept_invalid: tls.accept_invalid,
             lookup: Mutex::new(None),
+            handshake_timeout,
         })
     }
 
@@ -313,13 +321,23 @@ impl Net {
 
     async fn tcp(&self, host: &str, port: u16) -> Result<TcpStream, NetError> {
         let mut last = NetError::new(format!("no address for {host}"));
-        for addr in self.resolve(host, port).await? {
-            match TcpStream::connect(addr).await {
-                Ok(s) => {
+        let addrs = self.resolve(host, port).await?;
+        // A dead first address (often IPv6) mustn't use up the whole handshake
+        // timeout: each attempt gets a share of it, at least 500 ms.
+        let n = u32::try_from(addrs.len()).unwrap_or(u32::MAX).max(1);
+        let per = if n > 1 {
+            (self.handshake_timeout / n).max(std::time::Duration::from_millis(500))
+        } else {
+            self.handshake_timeout
+        };
+        for addr in addrs {
+            match tokio::time::timeout(per, TcpStream::connect(addr)).await {
+                Ok(Ok(s)) => {
                     let _ = s.set_nodelay(true);
                     return Ok(s);
                 }
-                Err(e) => last = NetError::new(format!("connect to {addr}: {e}")),
+                Ok(Err(e)) => last = NetError::new(format!("connect to {addr}: {e}")),
+                Err(_) => last = NetError::new(format!("connect to {addr}: timed out")),
             }
         }
         Err(last)
@@ -343,10 +361,7 @@ impl Net {
     /// Opens a byte stream to `url`'s host: through the proxy when one applies,
     /// with TLS for `wss`/`https`.
     pub(crate) async fn connect(&self, url: &Url, alpn: &[&[u8]]) -> Result<BoxIo, NetError> {
-        let host = url
-            .host_str()
-            .ok_or_else(|| NetError::new("URL has no host"))?
-            .to_owned();
+        let host = host_of(url)?;
         let secure = matches!(url.scheme(), "wss" | "https");
         let port = url
             .port_or_known_default()
@@ -354,10 +369,7 @@ impl Net {
         let io: BoxIo = match self.route_for(url) {
             Route::Direct => Box::pin(self.tcp(&host, port).await?),
             Route::Http { url: purl, auth } => {
-                let phost = purl
-                    .host_str()
-                    .ok_or_else(|| NetError::new("proxy URL has no host"))?
-                    .to_owned();
+                let phost = host_of(&purl).map_err(|_| NetError::new("proxy URL has no host"))?;
                 let pport = purl.port_or_known_default().unwrap_or(80);
                 let mut io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
                 if purl.scheme() == "https" {
@@ -370,12 +382,19 @@ impl Net {
                 auth,
                 remote_dns,
             } => {
-                let phost = purl
-                    .host_str()
-                    .ok_or_else(|| NetError::new("proxy URL has no host"))?
-                    .to_owned();
+                let phost = host_of(&purl).map_err(|_| NetError::new("proxy URL has no host"))?;
                 let pport = purl.port_or_known_default().unwrap_or(1080);
-                if remote_dns {
+                if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    // An address literal: sent as an address, never as a name.
+                    let io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
+                    socks5_connect(
+                        io,
+                        Target::Ip(SocketAddr::new(ip, port)),
+                        port,
+                        auth.as_ref(),
+                    )
+                    .await?
+                } else if remote_dns {
                     let io: BoxIo = Box::pin(self.tcp(&phost, pport).await?);
                     socks5_connect(io, Target::Domain(host.clone()), port, auth.as_ref()).await?
                 } else {
@@ -429,6 +448,18 @@ fn basic(a: &ProxyAuth) -> String {
 }
 
 /// An HTTP CONNECT tunnel (docs/spec.md §5.2).
+/// The host of a URL as a name or a bare address: an IPv6 literal without its
+/// URL brackets (`::1`, not `[::1]`), as TLS server names, socket addresses
+/// and SOCKS targets want it.
+fn host_of(url: &Url) -> Result<String, NetError> {
+    match url.host() {
+        Some(url::Host::Domain(d)) => Ok(d.to_owned()),
+        Some(url::Host::Ipv4(a)) => Ok(a.to_string()),
+        Some(url::Host::Ipv6(a)) => Ok(a.to_string()),
+        None => Err(NetError::new("URL has no host")),
+    }
+}
+
 async fn http_connect(
     mut io: BoxIo,
     host: &str,

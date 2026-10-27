@@ -57,6 +57,15 @@ impl CallTable {
     /// Fails every call of a transport (after its close was reported).
     pub(crate) fn sweep(&mut self, transport: TransportId) {
         self.closed.insert(transport);
+        // Transport ids only grow: keep the most recent ones, so the set
+        // doesn't grow with every reconnect. An insert for a transport this old
+        // comes from a long-stale snapshot and just times out.
+        while self.closed.len() > 64 {
+            let Some(oldest) = self.closed.iter().min().copied() else {
+                break;
+            };
+            self.closed.remove(&oldest);
+        }
         let ids: Vec<u32> = self
             .calls
             .iter()
@@ -176,7 +185,7 @@ pub(crate) async fn call(
     mut cmd: proto::Command,
 ) -> Result<proto::Reply, Error> {
     let timeout = shared.cfg.timeout;
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = tokio::time::Instant::now() + timeout.min(crate::config::MAX_DURATION);
     wait_ready(shared, sub, deadline).await?;
     let session = shared
         .snapshot
@@ -233,7 +242,8 @@ async fn wait_reply(
 
 /// `send()`: fire and forget, resolves once queued on a connected transport.
 pub(crate) async fn send(shared: &Arc<Shared>, cmd: proto::Command) -> Result<(), Error> {
-    let deadline = tokio::time::Instant::now() + shared.cfg.timeout;
+    let deadline =
+        tokio::time::Instant::now() + shared.cfg.timeout.min(crate::config::MAX_DURATION);
     wait_ready(shared, None, deadline).await?;
     let session = shared
         .snapshot
@@ -241,10 +251,18 @@ pub(crate) async fn send(shared: &Arc<Shared>, cmd: proto::Command) -> Result<()
         .session
         .clone()
         .ok_or(Error::ClientDisconnected)?;
+    // Resolves once written (backpressure on a slow socket), not once queued.
+    let (tx, rx) = oneshot::channel();
     session
         .writer
-        .send(WriteReq::send(cmd, &session))
-        .map_err(|_| Error::ClientDisconnected)
+        .send(WriteReq::send(cmd, &session, tx))
+        .map_err(|_| Error::ClientDisconnected)?;
+    match tokio::time::timeout_at(deadline, rx).await {
+        Ok(Ok(true)) => Ok(()),
+        // Not written, or the transport went away with it queued.
+        Ok(Ok(false) | Err(_)) => Err(Error::ClientDisconnected),
+        Err(_) => Err(Error::Timeout),
+    }
 }
 
 /// `ready()` (docs/spec.md §4.3): connected, after the `connected` handler.

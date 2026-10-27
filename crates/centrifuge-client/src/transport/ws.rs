@@ -183,7 +183,17 @@ async fn writer(
                     Err(e) => Message::Binary(Bytes::from(e.into_bytes())),
                 }
             };
-            if let Err(e) = sink.send(msg).await {
+            // A stalled socket must not keep the old transport alive after a
+            // reconnect: closing stops the write in progress.
+            let sent = tokio::select! {
+                r = sink.send(msg) => r,
+                _ = closing.wait_for(|c| *c) => {
+                    fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
+                    mark_sent(&mut reqs, false);
+                    return;
+                }
+            };
+            if let Err(e) = sent {
                 ok = false;
                 fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
                 mark_sent(&mut reqs, false);

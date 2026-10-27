@@ -18,7 +18,8 @@ use url::Url;
 
 use crate::calls;
 use crate::config::{
-    EventDelivery, ProxyConfig, TlsConfig, TransportEndpoint, check_http_headers, defaults, nonzero,
+    EventDelivery, ProxyConfig, TlsConfig, TransportEndpoint, check_http_headers, defaults,
+    duration,
 };
 use crate::dispatch::{ClientHandlers, Delivery, Dispatcher, in_handler};
 use crate::driver::{ConnTokenGetter, Driver, DriverConfig, TokenFuture};
@@ -866,8 +867,9 @@ impl ClientBuilder {
     ///
     /// # Errors
     ///
-    /// [`Error::Configuration`] for invalid options, or when there's no Tokio
-    /// runtime (neither [`runtime()`](Self::runtime) nor a current one).
+    /// [`Error::Configuration`] for invalid options (durations must be
+    /// longer than zero and at most 24 hours), or when there's no Tokio runtime
+    /// (neither [`runtime()`](Self::runtime) nor a current one).
     #[allow(clippy::too_many_lines)] // validation, then wiring; clearer in one place
     pub fn build(self) -> Result<Client, Error> {
         let endpoints = self.endpoints()?;
@@ -889,11 +891,11 @@ impl ClientBuilder {
                 "version is longer than 64 characters".into(),
             ));
         }
-        nonzero("timeout", self.timeout)?;
-        nonzero("handshake_timeout", self.handshake_timeout)?;
-        nonzero("min_reconnect_delay", self.min_reconnect_delay)?;
-        nonzero("max_reconnect_delay", self.max_reconnect_delay)?;
-        nonzero("max_server_ping_delay", self.max_server_ping_delay)?;
+        duration("timeout", self.timeout)?;
+        duration("handshake_timeout", self.handshake_timeout)?;
+        duration("min_reconnect_delay", self.min_reconnect_delay)?;
+        duration("max_reconnect_delay", self.max_reconnect_delay)?;
+        duration("max_server_ping_delay", self.max_server_ping_delay)?;
         if self.min_reconnect_delay > self.max_reconnect_delay {
             return Err(Error::Configuration(
                 "min_reconnect_delay is above max_reconnect_delay".into(),
@@ -921,7 +923,7 @@ impl ClientBuilder {
             }
             None => None,
         };
-        let net = Arc::new(Net::new(self.proxy, &self.tls)?);
+        let net = Arc::new(Net::new(self.proxy, &self.tls, self.handshake_timeout)?);
 
         let core = Core::new(CoreConfig {
             protocol: self.protocol,

@@ -386,3 +386,21 @@ async fn join_and_leave() {
     assert_eq!(ev.wait("leave").await, "leave c-9");
     client.close().await;
 }
+
+/// `send()` resolves once its command is written, not when it's queued: a
+/// stalled emulation request means no success (review finding).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_resolves_when_written() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::HttpStream, Protocol::Json)
+        .timeout(Duration::from_millis(500))
+        .build()
+        .unwrap();
+    client.connect().unwrap();
+    client.ready(None).await.unwrap();
+    client.send(r#"{"a":1}"#).await.unwrap();
+    srv.hang_emulation(true);
+    let r = client.send(r#"{"a":2}"#).await;
+    assert!(r.is_err(), "not written: {r:?}");
+    client.close().await;
+}

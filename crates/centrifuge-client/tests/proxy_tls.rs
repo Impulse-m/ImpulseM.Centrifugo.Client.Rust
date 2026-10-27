@@ -285,7 +285,13 @@ async fn custom_proxy_decides_per_endpoint() {
 /// A TLS front for the fake server, with a self-signed certificate for
 /// `localhost`. Returns its port and the certificate PEM.
 async fn tls_front(upstream: std::net::SocketAddr) -> (u16, String) {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    tls_front_on(upstream, "127.0.0.1:0", "localhost").await
+}
+
+/// A TLS front listening on `bind`, with a certificate for `name` (a host
+/// name or an IP address).
+async fn tls_front_on(upstream: std::net::SocketAddr, bind: &str, name: &str) -> (u16, String) {
+    let cert = rcgen::generate_simple_self_signed(vec![name.to_owned()]).unwrap();
     let pem = cert.cert.pem();
     let der = cert.cert.der().clone();
     let key = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into());
@@ -298,7 +304,7 @@ async fn tls_front(upstream: std::net::SocketAddr) -> (u16, String) {
     .with_single_cert(vec![der], key)
     .unwrap();
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
-    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l = TcpListener::bind(bind).await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
         loop {
@@ -414,4 +420,77 @@ async fn set_proxy_applies_to_the_next_attempt() {
         "the reconnect went through the proxy"
     );
     client.close().await;
+}
+
+/// IPv6 address literals in endpoint URLs: direct, over TLS (an IP
+/// certificate), through HTTP CONNECT and through SOCKS5 (review finding: the
+/// bracketed form `[::1]` went to TLS, CONNECT and SOCKS).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ipv6_literal_endpoints() {
+    if std::net::TcpListener::bind("[::1]:0").is_err() {
+        eprintln!("skipped: no IPv6 loopback");
+        return;
+    }
+    common::init_tracing();
+    let srv = centrifuge_fake_server::FakeServer::start(centrifuge_fake_server::FakeConfig {
+        bind: Some("[::1]:0".parse().unwrap()),
+        ..Default::default()
+    })
+    .await;
+    let port = srv.addr().port();
+    let direct = [
+        TransportEndpoint::websocket(format!("ws://[::1]:{port}/connection/websocket")),
+        TransportEndpoint::http_stream(format!("http://[::1]:{port}/connection/http_stream")),
+    ];
+    for ep in direct.clone() {
+        let c = connect_through(ep, ProxyConfig::None).await;
+        c.publish("v6", "{}").await.unwrap();
+        c.close().await;
+    }
+    // TLS with a certificate for the address.
+    let (tls_port, pem) = tls_front_on(srv.addr(), "[::1]:0", "::1").await;
+    for ep in [
+        TransportEndpoint::websocket(format!("wss://[::1]:{tls_port}/connection/websocket")),
+        TransportEndpoint::http_stream(format!("https://[::1]:{tls_port}/connection/http_stream")),
+    ] {
+        let tls = TlsConfig::new().add_root_pem(pem.as_bytes()).unwrap();
+        let client = Client::builder_with_transports([ep.clone()])
+            .proxy(ProxyConfig::None)
+            .tls(tls)
+            .build()
+            .unwrap();
+        client.connect().unwrap();
+        client
+            .ready(Some(Duration::from_secs(5)))
+            .await
+            .unwrap_or_else(|e| panic!("{ep:?}: {e}"));
+        client.close().await;
+    }
+    // Proxies.
+    let (hp, hseen) = http_proxy(None).await;
+    let (sp, sseen) = socks5_proxy(None).await;
+    for ep in direct {
+        let http = ProxyConfig::Http {
+            url: format!("http://127.0.0.1:{hp}").parse().unwrap(),
+            auth: None,
+        };
+        connect_through(ep.clone(), http).await.close().await;
+        let socks = ProxyConfig::Socks5 {
+            url: format!("socks5://127.0.0.1:{sp}").parse().unwrap(),
+            auth: None,
+            remote_dns: true,
+        };
+        connect_through(ep, socks).await.close().await;
+    }
+    let reqs = hseen.requests.lock().unwrap().clone();
+    assert!(
+        reqs.iter()
+            .all(|r| r.starts_with(&format!("CONNECT [::1]:{port} "))),
+        "{reqs:?}"
+    );
+    let kinds = sseen.requests.lock().unwrap().clone();
+    assert!(
+        kinds.iter().all(|k| k == "ipv6"),
+        "an address literal goes as an address: {kinds:?}"
+    );
 }

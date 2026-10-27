@@ -603,6 +603,13 @@ async fn configuration_errors() {
     assert!(bad(
         builder(&srv, TransportKind::WebSocket, Protocol::Json).timeout(Duration::ZERO)
     ));
+    // "No limit" as Duration::MAX overflowed the deadline arithmetic (review finding).
+    assert!(bad(
+        builder(&srv, TransportKind::WebSocket, Protocol::Json).timeout(Duration::MAX)
+    ));
+    assert!(bad(
+        builder(&srv, TransportKind::WebSocket, Protocol::Json).max_reconnect_delay(Duration::MAX)
+    ));
     assert!(bad(
         builder(&srv, TransportKind::WebSocket, Protocol::Json).name("a-very-long-client-name")
     ));

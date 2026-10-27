@@ -79,6 +79,10 @@ fn request(
         .body(Full::new(Bytes::from(body)))
         .map_err(|e| failed(None, e.to_string()))?;
     for (k, v) in &ctx.http_headers {
+        // The protocol's own content type and accept win (sent once).
+        if k == http::header::CONTENT_TYPE || k == http::header::ACCEPT {
+            continue;
+        }
         req.headers_mut().append(k, v.clone());
     }
     Ok(req)
@@ -318,7 +322,10 @@ async fn post(
             .await
             .map_err(|e| PostError::Close(failed(None, e.to_string())))?;
         let status = resp.status().as_u16();
-        let _ = resp.into_body().collect().await;
+        // An emulation reply has no body worth reading; bound what's read.
+        let _ = http_body_util::Limited::new(resp.into_body(), 64 * 1024)
+            .collect()
+            .await;
         if resp_ok(status) {
             Ok(())
         } else if status == 404

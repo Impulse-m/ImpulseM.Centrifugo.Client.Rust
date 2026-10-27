@@ -55,12 +55,17 @@ impl WriteReq {
         }
     }
 
-    pub(crate) fn send(cmd: proto::Command, s: &SessionHandle) -> Self {
+    /// A `send()`: `sent` reports whether the writer wrote it.
+    pub(crate) fn send(
+        cmd: proto::Command,
+        s: &SessionHandle,
+        sent: tokio::sync::oneshot::Sender<bool>,
+    ) -> Self {
         Self {
             cmds: vec![cmd],
             call_ids: vec![],
             emu: Self::emu_of(s),
-            sent: None,
+            sent: Some(sent),
         }
     }
 

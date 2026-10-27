@@ -263,9 +263,19 @@ pub(crate) mod defaults {
     pub(crate) const MAX_RESUBSCRIBE_DELAY: Duration = Duration::from_secs(20);
 }
 
-pub(crate) fn nonzero(name: &str, d: Duration) -> Result<Duration, Error> {
+/// The longest duration an option takes. Larger values (e.g. `Duration::MAX`
+/// meant as "no limit") would overflow deadline arithmetic.
+pub(crate) const MAX_DURATION: Duration = Duration::from_secs(24 * 3600);
+
+/// A duration option: neither zero (pattern 63) nor longer than a day.
+pub(crate) fn duration(name: &str, d: Duration) -> Result<Duration, Error> {
     if d.is_zero() {
         return Err(Error::Configuration(format!("{name} must not be zero")));
+    }
+    if d > MAX_DURATION {
+        return Err(Error::Configuration(format!(
+            "{name} must not be longer than 24 hours"
+        )));
     }
     Ok(d)
 }
@@ -277,6 +287,9 @@ pub(crate) fn check_http_headers(h: &http::HeaderMap) -> Result<(), Error> {
         if matches!(
             n,
             "host" | "connection" | "upgrade" | "content-length" | "transfer-encoding"
+                // Proxy credentials go in ProxyAuth: as a header they'd reach
+                // the origin on every request.
+                | "proxy-authorization"
         ) || n.starts_with("sec-websocket-")
         {
             return Err(Error::Configuration(format!(

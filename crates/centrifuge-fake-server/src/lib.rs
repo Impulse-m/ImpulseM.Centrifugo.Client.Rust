@@ -108,6 +108,8 @@ pub struct FakeConfig {
     pub connect_result: proto::ConnectResult,
     /// Publications kept per channel for history and recovery.
     pub history_size: usize,
+    /// Address to listen on (default `127.0.0.1:0`).
+    pub bind: Option<SocketAddr>,
 }
 
 impl Default for FakeConfig {
@@ -120,6 +122,7 @@ impl Default for FakeConfig {
                 ..Default::default()
             },
             history_size: 100,
+            bind: None,
         }
     }
 }
@@ -240,7 +243,10 @@ pub const EMULATION_PATH: &str = "/emulation";
 impl FakeServer {
     /// Starts on a random local port.
     pub async fn start(cfg: FakeConfig) -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let bind = cfg
+            .bind
+            .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
+        let listener = tokio::net::TcpListener::bind(bind)
             .await
             .expect("bind a local port");
         let addr = listener.local_addr().expect("local address");

@@ -18,7 +18,7 @@ use crate::client::{
     Client, history_command, history_result, presence_command, presence_result,
     presence_stats_command, presence_stats_result, publish_command,
 };
-use crate::config::{defaults, nonzero};
+use crate::config::{defaults, duration};
 use crate::dispatch::SubHandlers;
 use crate::driver::{StateFuture, SubCallbacks, SubTokenFuture};
 use crate::error::{BoxError, Error, TokenError};
@@ -509,8 +509,8 @@ impl SubscriptionBuilder {
         if self.cfg.channel.is_empty() {
             return Err(Error::Configuration("channel must not be empty".into()));
         }
-        nonzero("min_resubscribe_delay", self.cfg.min_resubscribe_delay)?;
-        nonzero("max_resubscribe_delay", self.cfg.max_resubscribe_delay)?;
+        duration("min_resubscribe_delay", self.cfg.min_resubscribe_delay)?;
+        duration("max_resubscribe_delay", self.cfg.max_resubscribe_delay)?;
         if self.cfg.min_resubscribe_delay > self.cfg.max_resubscribe_delay {
             return Err(Error::Configuration(
                 "min_resubscribe_delay is above max_resubscribe_delay".into(),
