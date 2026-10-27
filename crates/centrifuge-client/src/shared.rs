@@ -146,6 +146,9 @@ pub(crate) struct Shared {
     pub(crate) close_waiters: Mutex<Option<Vec<tokio::sync::oneshot::Sender<()>>>>,
     /// Serializes op sending; `true` once `close()` was sent.
     op_lock: Mutex<bool>,
+    /// Set by `close()` and when the last `Client` handle is dropped: the
+    /// driver stops waiting for stream consumers (§9.4).
+    pub(crate) stop: watch::Sender<bool>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -189,6 +192,7 @@ impl Shared {
             net,
             close_waiters: Mutex::new(Some(Vec::new())),
             op_lock: Mutex::new(false),
+            stop: watch::Sender::new(false),
         }
     }
 

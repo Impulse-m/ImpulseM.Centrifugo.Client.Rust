@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 
 use centrifuge_client_core::machine::Event;
 use centrifuge_client_core::types::Publication;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::client::{Client, ClientInner};
 use crate::config::EventDelivery;
@@ -515,28 +515,24 @@ fn hand_off<T>(
     tx: &mpsc::Sender<(T, oneshot::Sender<()>)>,
     item: T,
     waits: &mut Pending,
-    blocking: bool,
+    _blocking: bool,
 ) {
     // The channel has room for one item; it's empty here, because every
-    // previous offer was waited for before.
+    // previous offer was waited for before (unless the client is stopping,
+    // when nobody waits and a full channel drops the item).
     match offer(tx, item) {
-        Offer::Sent(ack) => {
-            if blocking {
-                // Wait until the consumer's next() takes it. A dropped stream
-                // drops the ack: it counts as taken (no listener).
-                let _ = ack.blocking_recv();
-            } else {
-                waits.push(ack);
-            }
-        }
+        // The driver waits until the consumer's next() takes it. A dropped
+        // stream drops the ack: it counts as taken (no listener).
+        Offer::Sent(ack) => waits.push(ack),
         Offer::Gone(_) => {}
     }
 }
 
-/// A batch for the dispatcher thread.
+/// One event for the dispatcher thread; it answers with the result and the
+/// stream acks still to wait for.
 pub(crate) struct Batch {
     pub(crate) events: Vec<Event>,
-    pub(crate) done: oneshot::Sender<BatchResult>,
+    pub(crate) done: oneshot::Sender<(BatchResult, Pending)>,
 }
 
 /// Where batches go.
@@ -561,8 +557,8 @@ impl Dispatcher {
                         let _rt = runtime.enter();
                         while let Ok(batch) = rx.recv() {
                             let mut waits = Vec::new();
-                            let res = delivery.run(batch.events, &mut waits, true);
-                            let _ = batch.done.send(res);
+                            let res = delivery.run(batch.events, &mut waits, false);
+                            let _ = batch.done.send((res, waits));
                         }
                     });
                 if let Err(e) = spawned {
@@ -573,32 +569,51 @@ impl Dispatcher {
         }
     }
 
-    /// Delivers a batch and waits for it, without blocking the runtime.
-    pub(crate) async fn deliver(&self, events: Vec<Event>) -> BatchResult {
-        match self {
-            Self::Thread(tx) => {
-                let (done, rx) = oneshot::channel();
-                if tx.send(Batch { events, done }).is_err() {
-                    return BatchResult::default();
+    /// Delivers a step's events and waits for them, without blocking the
+    /// runtime. One event at a time: each stream item must be taken before the
+    /// next is offered (one-slot hand-off). Once `stop` is set (`close()`, the
+    /// last handle dropped), streams are no longer waited for: an offered item
+    /// stays buffered for the stream, which ends after it.
+    pub(crate) async fn deliver(
+        &self,
+        events: Vec<Event>,
+        stop: &mut watch::Receiver<bool>,
+    ) -> BatchResult {
+        let mut res = BatchResult::default();
+        for ev in events {
+            let (r, waits) = match self {
+                Self::Thread(tx) => {
+                    let (done, rx) = oneshot::channel();
+                    if tx
+                        .send(Batch {
+                            events: vec![ev],
+                            done,
+                        })
+                        .is_err()
+                    {
+                        return res;
+                    }
+                    rx.await.unwrap_or_default()
                 }
-                rx.await.unwrap_or_default()
-            }
-            Self::Inline(d) => {
-                // One event at a time: each stream item must be taken before the
-                // next is offered (one-slot hand-off).
-                let mut res = BatchResult::default();
-                for ev in events {
+                Self::Inline(d) => {
                     let mut waits = Vec::new();
                     let r = d.run(vec![ev], &mut waits, false);
-                    if res.panic.is_none() {
-                        res.panic = r.panic;
-                    }
-                    for w in waits {
-                        let _ = w.await;
-                    }
+                    (r, waits)
                 }
-                res
+            };
+            if res.panic.is_none() {
+                res.panic = r.panic;
+            }
+            for w in waits {
+                if *stop.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    _ = w => {}
+                    _ = stop.wait_for(|s| *s) => {}
+                }
             }
         }
+        res
     }
 }

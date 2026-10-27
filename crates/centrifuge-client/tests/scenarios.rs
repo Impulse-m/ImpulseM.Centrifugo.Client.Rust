@@ -722,3 +722,101 @@ async fn subscribe_timeout_reconnects_inline() {
     sub.ready(Some(Duration::from_secs(3))).await.unwrap();
     client.close().await;
 }
+
+/// `close()` completes although streams are alive and never polled; their
+/// last item stays buffered, then they end (review finding: it hung).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_with_unpolled_streams() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Json)
+        .build()
+        .unwrap();
+    let mut events = client.events();
+    let sub = client.new_subscription("u").build().unwrap();
+    let mut sub_events = sub.events();
+    sub.subscribe();
+    client.connect().unwrap();
+    // Take what comes until connected and subscribed (both streams, as the
+    // events interleave), then stop polling.
+    let (mut connected, mut subscribed) = (false, false);
+    while !(connected && subscribed) {
+        tokio::select! {
+            Some(e) = events.next(), if !connected => connected = matches!(e, ClientEvent::Connected(_)),
+            Some(e) = sub_events.next(), if !subscribed => subscribed = matches!(e, SubscriptionEvent::Subscribed(_)),
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(2), client.close())
+        .await
+        .expect("close() doesn't wait for unpolled streams");
+    assert!(matches!(
+        events.next().await,
+        Some(ClientEvent::Disconnected(_))
+    ));
+    assert!(events.next().await.is_none());
+    assert!(matches!(
+        sub_events.next().await,
+        Some(SubscriptionEvent::Unsubscribed(_))
+    ));
+    assert!(sub_events.next().await.is_none());
+}
+
+/// Dropping the last client while a stream is alive and unpolled stops the
+/// client: the connection closes and the stream ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drop_with_unpolled_stream() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::HttpStream, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    let mut events = client.events();
+    client.connect().unwrap();
+    while !matches!(events.next().await, Some(ClientEvent::Connected(_))) {}
+    // A pending item nobody takes.
+    srv.message("{}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(client);
+    srv.wait_until(|s| (s.connection_count() == 0).then_some(()))
+        .await;
+    let rest: Vec<_> = tokio::time::timeout(Duration::from_secs(2), events.collect::<Vec<_>>())
+        .await
+        .expect("the stream ends");
+    assert!(rest.len() <= 2, "{rest:?}");
+}
+
+/// The runtime the client runs on shuts down: waiters on other runtimes are
+/// released (`close()` resolves, `ready()` fails, streams end).
+#[test]
+fn runtime_shutdown_releases_waiters() {
+    let main = tokio::runtime::Runtime::new().unwrap();
+    let other = tokio::runtime::Runtime::new().unwrap();
+    let srv = main.block_on(server());
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Json)
+        .runtime(other.handle().clone())
+        .build()
+        .unwrap();
+    // Never connected: ready() would fail at once; hold one on a subscription.
+    let sub = client.new_subscription("rt").build().unwrap();
+    sub.subscribe();
+    let mut events = client.events();
+    let waiting = main.spawn({
+        let sub = sub.clone();
+        async move { sub.ready(None).await }
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    other.shutdown_timeout(Duration::from_secs(1));
+    main.block_on(async {
+        let r = tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .expect("released")
+            .unwrap();
+        assert!(matches!(r, Err(Error::ClientClosed)), "{r:?}");
+        tokio::time::timeout(Duration::from_secs(2), client.close())
+            .await
+            .expect("close() resolves");
+        let end = tokio::time::timeout(Duration::from_secs(2), async {
+            while events.next().await.is_some() {}
+        })
+        .await;
+        assert!(end.is_ok(), "the stream ends");
+    });
+}

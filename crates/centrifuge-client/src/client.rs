@@ -54,6 +54,9 @@ pub(crate) struct ClientInner {
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
+        // An unpolled stream must not hold the driver (and its thread and
+        // socket) alive once nobody can reach the client.
+        self.shared.stop.send_replace(true);
         let _ = self.shared.commands.send(Command::Dropped);
     }
 }
@@ -185,6 +188,9 @@ impl Client {
             w.push(tx);
             rx
         });
+        // Closing never waits for stream consumers: an unpolled stream can't
+        // hold close() (its last item stays buffered, then it ends).
+        shared.stop.send_replace(true);
         shared.send_client_op(Op::Close, |_| State::Closed);
         let rx = if in_handler(shared.id) { None } else { rx };
         async move {

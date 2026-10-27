@@ -82,6 +82,19 @@ pub(crate) struct Driver {
     applied_seq: u64,
     wall: (SystemTime, std::time::Instant),
     stopping: bool,
+    /// `close()` or the last handle dropped: don't wait for stream consumers.
+    stop: watch::Receiver<bool>,
+    /// Token and state callbacks in flight, aborted on shutdown.
+    tasks: Vec<tokio::task::AbortHandle>,
+    finished: bool,
+}
+
+impl Drop for Driver {
+    /// Also when the driver task is dropped mid-step (a panic, the runtime
+    /// shutting down): waiters fail, streams end, `close()` resolves.
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 /// A timer that runs this much late means the process was suspended (§9.7).
@@ -109,6 +122,7 @@ impl Driver {
         commands: mpsc::UnboundedReceiver<Command>,
     ) -> Self {
         let (inbound_tx, inbound) = mpsc::channel(READ_AHEAD_ITEMS);
+        let stop = shared.stop.subscribe();
         let (callbacks_tx, callbacks) = mpsc::unbounded_channel();
         Self {
             core,
@@ -127,6 +141,9 @@ impl Driver {
             applied_seq: 0,
             wall: (SystemTime::now(), std::time::Instant::now()),
             stopping: false,
+            stop,
+            tasks: Vec::new(),
+            finished: false,
         }
     }
 
@@ -326,7 +343,7 @@ impl Driver {
             // slow handler never holds back a pong or an unsubscribe (§9.2).
             self.flush_writes();
             self.publish(&touched, false);
-            let res = self.dispatcher.deliver(events).await;
+            let res = self.dispatcher.deliver(events, &mut self.stop).await;
             // Close first, then fail the calls (pattern 47).
             self.sweep(&fail);
             out = self.core.step(
@@ -476,7 +493,8 @@ impl Driver {
         }
     }
 
-    fn spawn_callback(&self, cb: Callback) {
+    fn spawn_callback(&mut self, cb: Callback) {
+        self.tasks.retain(|t| !t.is_finished());
         let tx = self.callbacks_tx.clone();
         let id = self.shared.id;
         match cb {
@@ -488,7 +506,7 @@ impl Driver {
                     });
                     return;
                 };
-                tokio::spawn(IN_CALLBACK.scope(id, async move {
+                let task = tokio::spawn(IN_CALLBACK.scope(id, async move {
                     let fut = AssertUnwindSafe(async move {
                         getter(crate::client::ConnectionTokenContext::new()).await
                     })
@@ -496,6 +514,7 @@ impl Driver {
                     let result = settle(fut.await.unwrap_or_else(|p| Err(panicked(&*p))));
                     let _ = tx.send(Input::TokenSettled { flow, result });
                 }));
+                self.tasks.push(task.abort_handle());
             }
             Callback::SubscriptionToken { flow, sub, channel } => {
                 let getter = lock(&self.shared.by_key)
@@ -508,19 +527,20 @@ impl Driver {
                     });
                     return;
                 };
-                tokio::spawn(IN_CALLBACK.scope(id, async move {
+                let task = tokio::spawn(IN_CALLBACK.scope(id, async move {
                     let ctx = crate::subscription::SubscriptionTokenContext::new(channel);
                     let fut = AssertUnwindSafe(async move { getter(ctx).await }).catch_unwind();
                     let result = settle(fut.await.unwrap_or_else(|p| Err(panicked(&*p))).map(Some));
                     let _ = tx.send(Input::TokenSettled { flow, result });
                 }));
+                self.tasks.push(task.abort_handle());
             }
             Callback::GetState { flow, sub, channel } => {
                 let getter = lock(&self.shared.by_key)
                     .get(&sub)
                     .and_then(|s| s.callbacks.get_state.clone());
                 let Some(getter) = getter else { return };
-                tokio::spawn(IN_CALLBACK.scope(id, async move {
+                let task = tokio::spawn(IN_CALLBACK.scope(id, async move {
                     let ctx = crate::subscription::SubscriptionGetStateContext::new(channel);
                     let fut = AssertUnwindSafe(async move { getter(ctx).await }).catch_unwind();
                     let result = match fut.await {
@@ -530,24 +550,43 @@ impl Driver {
                     };
                     let _ = tx.send(Input::StateSettled { flow, result });
                 }));
+                self.tasks.push(task.abort_handle());
             }
             _ => {}
         }
     }
 
+    /// Idempotent: from the end of `run()`, or from `Drop`.
     fn shutdown(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
         let ids: Vec<_> = self.transports.keys().copied().collect();
         for t in ids {
             self.close_transport(t);
         }
+        for t in self.tasks.drain(..) {
+            t.abort();
+        }
+        // Whatever stopped the driver, the client is closed from now on.
+        self.shared.stop.send_replace(true);
+        self.shared.snapshot.send_modify(|s| {
+            s.state = State::Closed;
+            s.ready = false;
+            s.session = None;
+        });
         lock(&self.shared.calls).fail_all(&crate::Error::ClientClosed);
-        // Streams end on close (§9.4).
+        // Mark closed before ending the streams: a stream asked for meanwhile
+        // sees it and ends at once (§9.4).
+        let waiters = lock(&self.shared.close_waiters).take().unwrap_or_default();
         lock(&self.shared.events_stream).close();
-        for inner in lock(&self.shared.registry).values() {
+        let subs: Vec<_> = lock(&self.shared.registry).values().cloned().collect();
+        let removed: Vec<_> = lock(&self.shared.by_key).values().cloned().collect();
+        for inner in subs.iter().chain(&removed) {
             lock(&inner.events_stream).close();
             lock(&inner.publications_stream).close();
         }
-        let waiters = lock(&self.shared.close_waiters).take().unwrap_or_default();
         for w in waiters {
             let _ = w.send(());
         }
