@@ -1,0 +1,12 @@
+# Coverage fails a check only when the project's coverage drops by more than
+# 1 percentage point against the base commit. Patch coverage is reported, not
+# enforced.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        informational: true
