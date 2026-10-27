@@ -4,7 +4,8 @@
 //!   `crates/centrifuge-client-core/proto/client.proto`. Needs `protoc` on `PATH`.
 //!   The output is committed, so users never need `protoc`.
 //! - `tla-traces`: generate the TLA+ traces the core replays (see `tla.rs`).
-//! - `tla-check [config...]`: model-check the replayed schedules exhaustively.
+//! - `tla-check [config...]`: model-check the replayed schedules exhaustively
+//!   (all configs but the large ones, unless configs are named).
 
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI
 

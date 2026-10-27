@@ -43,6 +43,9 @@ const CONFIGS: &[&str] = &[
     "MC_two_channels",
 ];
 
+/// Configs `tla-check` runs only when named.
+const LARGE: &[&str] = &["MC_large", "MC_large_emulation"];
+
 /// Configs of wrong behaviours (bug variants of the model, several of them
 /// centrifuge-js today) that phase 1 can express. TLC's counterexample of each
 /// (under the replayed schedules) must not replay into the core.
@@ -69,7 +72,8 @@ type Res<T> = Result<T, Box<dyn std::error::Error>>;
 /// `cargo xtask tla-check [config...]`: TLC model-checks `ReplaySpec` (the
 /// narrowed schedules) exhaustively against each config's invariants, to show
 /// the narrowing keeps every safety property of the model. Prints one line per
-/// config; fails if any invariant is violated.
+/// config; fails if any invariant is violated. The large configs run only
+/// when named: their state space outgrows 100 GB of disk.
 pub(crate) fn check(root: &Path, only: &[String]) -> Res<()> {
     let model = std::env::var_os("TLA_MODEL").map_or_else(
         || root.join("../centrifugo-pro-source/tla/sdk"),
@@ -88,10 +92,14 @@ pub(crate) fn check(root: &Path, only: &[String]) -> Res<()> {
         work.join("Replay.tla"),
     )?;
     let mut failed = Vec::new();
-    for cfg in CONFIGS
-        .iter()
-        .filter(|c| only.is_empty() || only.iter().any(|o| o == *c))
-    {
+    for cfg in CONFIGS.iter().filter(|c| {
+        if only.is_empty() {
+            !LARGE.contains(c)
+        } else {
+            only.iter().any(|o| o == *c)
+        }
+    }) {
+        println!("{cfg}: checking");
         let text = std::fs::read_to_string(model.join("configs").join(format!("{cfg}.cfg")))?;
         std::fs::write(work.join(format!("{cfg}.cfg")), replay_cfg(&text))?;
         let started = std::time::Instant::now();
@@ -111,10 +119,11 @@ pub(crate) fn check(root: &Path, only: &[String]) -> Res<()> {
             .arg(work.join("meta").join(cfg))
             .arg("Replay.tla")
             .output()?;
+        let _ = std::fs::remove_dir_all(work.join("meta").join(cfg));
         let stdout = String::from_utf8_lossy(&out.stdout);
         let states = stdout
             .lines()
-            .find(|l| l.contains("distinct states found"))
+            .rfind(|l| l.contains("distinct states found"))
             .unwrap_or("")
             .trim()
             .to_owned();

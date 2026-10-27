@@ -1495,7 +1495,7 @@ Settled during implementation, 2026-10-27 (reviewed one by one):
 | 30 | `Client::builder(url)` is infallible; `build()` validates | §4.1 |
 | 31 | Emulation POSTs: 404/401/403/3xx/5xx close the transport; other non-2xx fail that request's calls with `Error::Transport` | §5.7 |
 | 32 | A `Subscription` keeps its `Client` alive (strong reference; no cycle through handlers) | §9.8 |
-| 33 | The TLA+ replay narrows the model's schedules to the implemented ones (`tests/tla/Replay.tla`); the narrowed spec is model-checked exhaustively (`cargo xtask tla-check`) | §11.1 |
+| 33 | The TLA+ replay narrows the model's schedules to the implemented ones (`tests/tla/Replay.tla`); the narrowed spec is model-checked exhaustively (`cargo xtask tla-check`; `MC_large` and `MC_large_emulation` only when named, as their state space outgrows 100 GB of disk) | §11.1 |
 | 34 | A system sleep longer than the no-ping window reconnects at once | §9.7 |
 | 35 | SOCKS5 with local DNS tries every resolved address | §5.2 |
 | 36 | Benchmark comparisons go to the PR job summary, not a comment | §11.1 |
