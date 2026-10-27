@@ -19,7 +19,7 @@ use url::Url;
 use crate::calls;
 use crate::config::{
     EventDelivery, ProxyConfig, TlsConfig, TransportEndpoint, check_http_headers, defaults,
-    duration,
+    duration, validate_max_pending_rpc,
 };
 use crate::dispatch::{ClientHandlers, Delivery, Dispatcher, in_handler};
 use crate::driver::{ConnTokenGetter, Driver, DriverConfig, TokenFuture};
@@ -29,6 +29,7 @@ use crate::events::{
     ServerJoinEvent, ServerLeaveEvent, ServerPublicationEvent, ServerSubscribedEvent,
     ServerSubscribingEvent, ServerUnsubscribedEvent,
 };
+use crate::instance::{self, Redacted};
 use crate::maybe_send::{MaybeSend, MaybeSync};
 use crate::shared::{CallConfig, Command, Shared, lock};
 use crate::stats::Statistics;
@@ -646,6 +647,8 @@ pub struct ClientBuilder {
     proxy: ProxyConfig,
     event_delivery: EventDelivery,
     handlers: ClientHandlers,
+    instance: Option<String>,
+    max_pending_rpc: u32,
 }
 
 impl std::fmt::Debug for ClientBuilder {
@@ -657,6 +660,8 @@ impl std::fmt::Debug for ClientBuilder {
             .field("timeout", &self.timeout)
             .field("proxy", &self.proxy)
             .field("event_delivery", &self.event_delivery)
+            .field("instance", &self.instance.as_ref().map(|_| Redacted))
+            .field("max_pending_rpc", &self.max_pending_rpc)
             .finish_non_exhaustive()
     }
 }
@@ -685,6 +690,8 @@ impl ClientBuilder {
             proxy: ProxyConfig::default(),
             event_delivery: EventDelivery::default(),
             handlers: ClientHandlers::default(),
+            instance: None,
+            max_pending_rpc: defaults::MAX_PENDING_RPC,
         }
     }
 
@@ -826,6 +833,20 @@ impl ClientBuilder {
         self
     }
 
+    /// The instance of this client: 22 to 64 characters of `A-Z`, `a-z`,
+    /// `0-9`, `_` or `-`. Checked in [`build()`](Self::build); never logged.
+    pub fn instance(mut self, instance: impl Into<String>) -> Self {
+        self.instance = Some(instance.into());
+        self
+    }
+
+    /// Bounds the tracked rpc calls of a client with an instance that are not
+    /// settled yet (default 32, at least 1).
+    pub fn max_pending_rpc(mut self, max: u32) -> Self {
+        self.max_pending_rpc = max;
+        self
+    }
+
     fn endpoints(&self) -> Result<Vec<(TransportKind, Url)>, Error> {
         if self.endpoints.is_empty() {
             return Err(Error::Configuration("no transport endpoint".into()));
@@ -898,6 +919,10 @@ impl ClientBuilder {
         duration("min_reconnect_delay", self.min_reconnect_delay)?;
         duration("max_reconnect_delay", self.max_reconnect_delay)?;
         duration("max_server_ping_delay", self.max_server_ping_delay)?;
+        if let Some(instance) = &self.instance {
+            instance::validate(instance)?;
+        }
+        validate_max_pending_rpc(self.max_pending_rpc)?;
         if self.min_reconnect_delay > self.max_reconnect_delay {
             return Err(Error::Configuration(
                 "min_reconnect_delay is above max_reconnect_delay".into(),
@@ -1003,4 +1028,48 @@ fn _assert_traits() {
     send_sync::<ConnectedEvent>();
     send_sync::<ErrorEvent>();
     send_sync::<DisconnectedEvent>();
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::Error;
+
+    use super::Client;
+
+    const VALID_INSTANCE: &str = "Install_id-0123456789ABCDEF";
+
+    #[tokio::test]
+    async fn instance_valid_builds() {
+        let built = Client::builder("wss://example.com/connection/websocket")
+            .instance(VALID_INSTANCE)
+            .build();
+        assert!(built.is_ok());
+    }
+
+    #[tokio::test]
+    async fn instance_invalid_fails_build_with_configuration_error() {
+        let built = Client::builder("wss://example.com/connection/websocket")
+            .instance("too short")
+            .build();
+        assert!(matches!(built, Err(Error::Configuration(_))));
+    }
+
+    #[tokio::test]
+    async fn instance_debug_output_redacts_the_instance() {
+        let builder =
+            Client::builder("wss://example.com/connection/websocket").instance(VALID_INSTANCE);
+        let text: String = format!("{builder:?}");
+        assert!(text.contains("instance: Some(<redacted>)"));
+        assert!(!text.contains(VALID_INSTANCE));
+    }
+
+    #[tokio::test]
+    async fn instance_max_pending_rpc_defaults_to_32_and_rejects_zero() {
+        let default_built = Client::builder("wss://example.com/connection/websocket").build();
+        assert!(default_built.is_ok());
+        let zero = Client::builder("wss://example.com/connection/websocket")
+            .max_pending_rpc(0)
+            .build();
+        assert!(matches!(zero, Err(Error::Configuration(_))));
+    }
 }

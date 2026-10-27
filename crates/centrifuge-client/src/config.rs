@@ -326,6 +326,7 @@ pub(crate) mod defaults {
     pub(crate) const MAX_MESSAGE_SIZE: usize = 64 << 20;
     pub(crate) const MIN_RESUBSCRIBE_DELAY: Duration = Duration::from_millis(500);
     pub(crate) const MAX_RESUBSCRIBE_DELAY: Duration = Duration::from_secs(20);
+    pub(crate) const MAX_PENDING_RPC: u32 = 32;
 }
 
 /// The longest duration an option takes. Larger values (e.g. `Duration::MAX`
@@ -343,6 +344,16 @@ pub(crate) fn duration(name: &str, d: Duration) -> Result<Duration, Error> {
         )));
     }
     Ok(d)
+}
+
+/// The bound of unsettled tracked rpc calls: at least 1.
+pub(crate) fn validate_max_pending_rpc(max: u32) -> Result<u32, Error> {
+    if max < 1 {
+        return Err(Error::Configuration(
+            "max_pending_rpc must be at least 1".into(),
+        ));
+    }
+    Ok(max)
 }
 
 /// Headers the transport manages and the app may not set (docs/spec.md §5.1).
