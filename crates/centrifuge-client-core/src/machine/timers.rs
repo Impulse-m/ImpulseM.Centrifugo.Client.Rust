@@ -124,7 +124,8 @@ impl Rng {
 pub(crate) fn backoff(rng: &mut Rng, attempt: u32, min: Duration, max: Duration) -> Duration {
     let factor = 1u32 << attempt.min(31);
     let interval = min.checked_mul(factor).unwrap_or(max).min(max);
-    (min + rng.between(Duration::ZERO, interval)).min(max)
+    min.saturating_add(rng.between(Duration::ZERO, interval))
+        .min(max)
 }
 
 #[cfg(test)]

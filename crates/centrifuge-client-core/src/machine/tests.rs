@@ -1472,6 +1472,64 @@ fn compaction_routes_by_id_and_drops_unknown_ids() {
     assert_eq!(names(&h.take_events()), ["pub(1,0)"]);
 }
 
+/// An unsubscribe push (code >= 2500) retires the subscription's compaction
+/// id: after the resubscribe gets a new id, pushes with the old one are dropped.
+#[test]
+fn resubscribe_push_retires_the_old_compaction_id() {
+    let mut h = H::json();
+    h.new_sub(1, SubConfig::new("news"));
+    h.op(Op::Subscribe(1));
+    let t = h.connect();
+    let cmds = h.take_commands();
+    let sub = subscribe_cmd(&cmds);
+    h.reply(
+        t,
+        subscribe_ok(
+            sub.id,
+            proto::SubscribeResult {
+                id: 42,
+                ..Default::default()
+            },
+        ),
+    );
+    h.push(
+        t,
+        proto::Push {
+            channel: "news".into(),
+            unsubscribe: Some(proto::Unsubscribe {
+                code: 2501,
+                reason: "resubscribe".into(),
+            }),
+            ..Default::default()
+        },
+    );
+    h.advance(Duration::from_secs(3));
+    let cmds = h.take_commands();
+    let sub = subscribe_cmd(&cmds);
+    h.reply(
+        t,
+        subscribe_ok(
+            sub.id,
+            proto::SubscribeResult {
+                id: 43,
+                ..Default::default()
+            },
+        ),
+    );
+    h.take_events();
+    for id in [42, 43] {
+        h.push(
+            t,
+            proto::Push {
+                id,
+                r#pub: Some(publication(0, b"{}")),
+                ..Default::default()
+            },
+        );
+    }
+    assert_eq!(names(&h.take_events()), ["pub(1,0)"]);
+}
+
 #[test]
 fn delta_fossil_applies_and_broken_chain_stops() {
     let base = b"{\"text\":\"hello world, this is the base payload\"}".to_vec();
@@ -1793,4 +1851,7 @@ fn backoff_jitter_with_huge_bounds_does_not_overflow() {
         let _ = r.between(Duration::from_secs(1), Duration::MAX);
     }
     let _ = super::timers::backoff(&mut r, 1000, Duration::from_millis(500), Duration::MAX);
+    for attempt in [0, 1, 1000] {
+        let _ = super::timers::backoff(&mut r, attempt, Duration::MAX, Duration::MAX);
+    }
 }
