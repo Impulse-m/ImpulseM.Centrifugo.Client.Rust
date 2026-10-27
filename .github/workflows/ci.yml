@@ -139,7 +139,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Without a TLS crypto provider the client is a compile_error! (spec
       # §3.3); depth 3 covers the codec × transport × provider combinations.
-      - run: cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring --exclude-features test-util --no-dev-deps --locked
+      # No --locked: --no-dev-deps edits the manifests, so the lock file differs.
+      - run: cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring --exclude-features test-util --no-dev-deps
         env:
           RUSTFLAGS: -D warnings
 
