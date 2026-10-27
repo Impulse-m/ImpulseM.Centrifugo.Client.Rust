@@ -18,7 +18,10 @@ fn main() -> ExitCode {
     let res = match task.as_deref() {
         Some("proto") => proto(),
         Some("tla-traces") => tla::traces(&workspace_root()),
-        Some("tla-check") => tla::check(&workspace_root(), &std::env::args().skip(2).collect::<Vec<_>>()),
+        Some("tla-check") => tla::check(
+            &workspace_root(),
+            &std::env::args().skip(2).collect::<Vec<_>>(),
+        ),
         _ => {
             eprintln!("usage: cargo xtask <proto|tla-traces|tla-check [config...]>");
             return ExitCode::FAILURE;

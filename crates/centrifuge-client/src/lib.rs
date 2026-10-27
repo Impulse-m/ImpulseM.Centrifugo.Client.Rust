@@ -7,28 +7,35 @@
 //! with the OS trust store.
 //!
 //! ```no_run
-//! use centrifuge::{Client, HistoryOptions};
+//! use centrifuge::Client;
+//! # mod my_backend {
+//! #     pub async fn connection_token() -> Result<String, std::io::Error> { Ok(String::new()) }
+//! #     pub async fn subscription_token(_: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
+//! # }
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = Client::builder("wss://example.com/connection/websocket")
-//!     .token("<connection JWT>")
+//!     // Called before the first connect and before the token expires.
+//!     .get_token(|_ctx| async move {
+//!         let token = my_backend::connection_token().await?;
+//!         Ok(Some(token))
+//!     })
 //!     .on_connected(|_client, e| println!("connected, client id {}", e.client_id))
-//!     .on_disconnected(|_client, e| println!("disconnected: {} {}", e.code, e.reason))
+//!     .on_disconnected(|_client, e| println!("disconnected: {} ({})", e.reason, e.code))
 //!     .build()?;
 //!
 //! let sub = client
-//!     .new_subscription("news")
+//!     .new_subscription("chat:42")
+//!     // A token for this channel, also refreshed before it expires.
+//!     .get_token(|ctx| async move { Ok(my_backend::subscription_token(&ctx.channel).await?) })
 //!     .recoverable(true)
-//!     .on_publication(|_sub, e| println!("{}: {:?}", e.offset, e.data))
+//!     .on_publication(|_sub, e| println!("{}", String::from_utf8_lossy(&e.data)))
 //!     .build()?;
 //!
-//! sub.subscribe(); // never waits; sent once connected
+//! sub.subscribe(); // never waits: sent right after the connect reply
 //! client.connect()?;
 //! sub.ready(None).await?;
 //! sub.publish(r#"{"text":"hello"}"#).await?;
-//! let recent = sub.history(HistoryOptions::new().limit(10)).await?;
-//! println!("{} recent publications", recent.publications.len());
-//! client.close().await;
 //! # Ok(()) }
 //! ```
 //!

@@ -400,9 +400,18 @@ async fn set_proxy_applies_to_the_next_attempt() {
     client.connect().unwrap();
     client.ready(Some(Duration::from_secs(3))).await.unwrap();
     assert_eq!(seen.connects.load(Ordering::SeqCst), 0);
-    client.set_proxy(ProxyConfig::Http { url: format!("http://127.0.0.1:{port}").parse().unwrap(), auth: None }).unwrap();
+    client
+        .set_proxy(ProxyConfig::Http {
+            url: format!("http://127.0.0.1:{port}").parse().unwrap(),
+            auth: None,
+        })
+        .unwrap();
     srv.terminate();
     srv.wait_until(|s| (s.connects() == 2).then_some(())).await;
-    assert_eq!(seen.connects.load(Ordering::SeqCst), 1, "the reconnect went through the proxy");
+    assert_eq!(
+        seen.connects.load(Ordering::SeqCst),
+        1,
+        "the reconnect went through the proxy"
+    );
     client.close().await;
 }

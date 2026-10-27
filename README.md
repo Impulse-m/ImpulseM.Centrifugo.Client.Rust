@@ -8,7 +8,7 @@
 
 The official Rust real-time client SDK for [Centrifugo](https://centrifugal.dev) and the [Centrifuge](https://github.com/centrifugal/centrifuge) library. Built for desktop apps (Tauri and others), backend services, bots and tools that need a live connection.
 
-- **Transports:** WebSocket, and HTTP-streaming with fallback between them. Corporate networks that block WebSocket still work.
+- **Transports:** WebSocket, and HTTP-streaming fallback.
 - **Protocols:** Protobuf (the default) and JSON.
 - **Subscriptions:** client-side and server-side ones, positioned and recoverable streams, history, presence, join/leave, delta compression (fossil), and server-side tags filters.
 - **Exactly-once delivery across reconnects:** missed publications are recovered, and losses are reported (`recovered: false`). Positions can be saved and restored across restarts.
@@ -19,7 +19,7 @@ The official Rust real-time client SDK for [Centrifugo](https://centrifugal.dev)
 ```toml
 [dependencies]
 centrifuge-client = "0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 ```
 
 The package is `centrifuge-client`; the library is imported as `centrifuge`.
@@ -27,20 +27,27 @@ The package is `centrifuge-client`; the library is imported as `centrifuge`.
 ## Quick start
 
 ```rust
-use centrifuge::{Client, HistoryOptions};
+use centrifuge::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::builder("wss://example.com/connection/websocket")
-        .token("<connection JWT>")
+        // Called before the first connect and before the token expires.
+        .get_token(|_ctx| async move {
+            let token = my_backend::connection_token().await?;
+            Ok(Some(token))
+        })
         .on_connected(|_client, e| println!("connected, client id {}", e.client_id))
         .on_disconnected(|_client, e| println!("disconnected: {} ({})", e.reason, e.code))
         .build()?;
 
     let sub = client
-        .new_subscription("news")
+        .new_subscription("chat:42")
+        // A token for this channel, also refreshed before it expires.
+        .get_token(|ctx| async move { Ok(my_backend::subscription_token(&ctx.channel).await?) })
         .recoverable(true)
-        .on_publication(|_sub, e| println!("{}: {}", e.offset, String::from_utf8_lossy(&e.data)))
+        .on_subscribed(|sub, _| println!("subscribed to {}", sub.channel()))
+        .on_publication(|_sub, e| println!("{}", String::from_utf8_lossy(&e.data)))
         .build()?;
 
     sub.subscribe();     // never waits: sent right after the connect reply
@@ -48,19 +55,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sub.ready(None).await?;
 
     sub.publish(r#"{"text":"hello"}"#).await?;
-    let last_ten = sub.history(HistoryOptions::new().limit(10)).await?;
-    println!("{} recent publications", last_ten.publications.len());
 
+    tokio::signal::ctrl_c().await?;
     client.close().await;
     Ok(())
 }
 ```
 
+`my_backend` stands for your app server, which issues the JWTs ([connection](https://centrifugal.dev/docs/server/authentication) and [channel](https://centrifugal.dev/docs/server/channel_token_auth) tokens). With a static token, use `.token(…)` instead of `.get_token(…)`.
+
 More in [`crates/centrifuge-client/examples`](crates/centrifuge-client/examples): a terminal chat with typed JSON, token refresh, streams with `select!`, recovery across restarts, server-side subscriptions, and the patterns for a desktop app.
 
 ```sh
 docker compose up -d                      # Centrifugo on localhost:8010 (and 8012, secure)
-cargo run --example quickstart
+cargo run --example quickstart            # against the secure instance, with tokens
 cargo run --example chat --features serde -- alice
 ```
 
