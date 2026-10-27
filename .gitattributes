@@ -1,0 +1,2 @@
+# Byte-exact test vectors: no line-ending conversion on Windows checkouts.
+crates/centrifuge-client-core/testdata/** -text
