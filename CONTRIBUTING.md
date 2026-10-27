@@ -78,13 +78,13 @@ Both crates are released together with the same version.
 
 ## Releases
 
-Releases are automated with [release-plz](https://release-plz.dev):
+1. Every merge to `main` opens or updates a **release PR** ([release-plz](https://release-plz.dev), `.github/workflows/release-plz.yml`). It bumps the version of both crates from the commit history, checks the bump with `cargo-semver-checks`, and updates `CHANGELOG.md`.
+2. Review the release PR (version and changelog), then squash-merge it, and wait for CI on `main`.
+3. Tag the merge commit and push the tag:
+   `git pull && git tag vX.Y.Z && git push origin vX.Y.Z`
+4. The tag runs `.github/workflows/release.yml`. It checks the tag names the workspace version, points at a commit on `main`, and passed CI. Then it publishes the core and the client to crates.io through **trusted publishing** (OIDC, no long-lived token) and creates the GitHub release from the version's `CHANGELOG.md` section.
 
-1. Every merge to `main` opens or updates a **release PR**. It bumps the version from the commit history, checks the bump with `cargo-semver-checks`, and updates `CHANGELOG.md`.
-2. Review the release PR (version and changelog), then merge it.
-3. The release workflow publishes to crates.io through **trusted publishing** (OIDC, no long-lived token), then creates the `vX.Y.Z` tag and the GitHub release.
-
-Nobody runs `cargo publish` by hand, except for the first publish below.
+Versions already on crates.io are skipped, so rerunning the workflow after a partial failure finishes the release. Nobody runs `cargo publish` by hand, except for the first publish below.
 
 ### Release setup (one time, maintainers)
 
@@ -93,11 +93,12 @@ Nobody runs `cargo publish` by hand, except for the first publish below.
    - From a clean checkout of the pushed `main` commit (no `--allow-dirty`, so the published `.cargo_vcs_info.json` points at a commit on `main`, which release-plz diffs the next release against), publish the core first:
      `cargo publish -p centrifuge-client-core && cargo publish -p centrifuge-client`
    - Revoke the token.
-   - Tag and release that commit, which release-plz doesn't do for a manual publish: `git tag v0.1.0 && git push origin v0.1.0`, then `gh release create v0.1.0 --title v0.1.0 --notes-file <the 0.1.0 section of CHANGELOG.md>`.
-2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`. After the first release through CI works, also turn on **Trusted Publishing Only** mode there, which rejects token publishes.
-3. **GitHub environment.** Create an environment named `release` (Settings → Environments) and restrict it to the `main` branch. Don't add required reviewers: the release job runs on every push to `main` (it publishes only for a merged release PR), so reviewers would gate every merge. Merging the release PR is the approval.
-4. **GitHub App for release PRs.** PRs opened with the default `GITHUB_TOKEN` don't trigger CI.
+   - Push the tag, `git tag v0.1.0 && git push origin v0.1.0`. The release workflow finds both crates published and only creates the GitHub release.
+2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release.yml`, environment `release`. After the first release through CI works, also turn on **Trusted Publishing Only** mode there, which rejects token publishes.
+3. **GitHub environment.** Create an environment named `release` (Settings → Environments). Under deployment branches and tags, allow only tags matching `v*`. Optionally add required reviewers: they approve each publish.
+4. **Tag protection.** Add a tag ruleset for `v*` (Settings → Rules → Rulesets) that only maintainers can bypass, so only they can create, move or delete release tags.
+5. **GitHub App for release PRs.** PRs opened with the default `GITHUB_TOKEN` don't trigger CI.
    - Create (or reuse) an org GitHub App with *Contents: read & write* and *Pull requests: read & write*, and install it on this repository.
    - Store its client ID as the repository variable `RELEASE_PLZ_APP_CLIENT_ID`, and its private key as the secret `RELEASE_PLZ_APP_PRIVATE_KEY`.
-5. **Branch protection on `main`.** Require the `CI success` and `Conventional commit title` checks. Allow squash merges only.
-6. **Codecov** (optional). Install the Codecov GitHub App for the repository. Uploads use OIDC, so no token is needed.
+6. **Branch protection on `main`.** Require the `CI success` and `Conventional commit title` checks. Allow squash merges only.
+7. **Codecov** (optional). Install the Codecov GitHub App for the repository. Uploads use OIDC, so no token is needed.

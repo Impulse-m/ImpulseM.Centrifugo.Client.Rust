@@ -1,13 +1,10 @@
-# Automated releases with release-plz (https://release-plz.dev).
+# The release PR, with release-plz (https://release-plz.dev): every push to
+# main opens or updates it. It bumps the version from conventional commits
+# (checked with cargo-semver-checks) and updates CHANGELOG.md.
 #
-# 1. Every push to main updates a "release PR". It bumps the version from
-#    conventional commits (checked with cargo-semver-checks) and updates
-#    CHANGELOG.md.
-# 2. Merging that PR publishes to crates.io via trusted publishing (OIDC, no
-#    token secret), then creates the git tag and the GitHub release.
-#
-# One-time setup is described in CONTRIBUTING.md ("Release setup").
-name: Release-plz
+# Publishing is not done here: after the PR is merged, a maintainer pushes the
+# `vX.Y.Z` tag and release.yml publishes. Setup: CONTRIBUTING.md, "Releases".
+name: Release PR
 
 on:
   push:
@@ -16,30 +13,6 @@ on:
 permissions: {}
 
 jobs:
-  release:
-    name: Release
-    if: github.repository_owner == 'centrifugal'
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      contents: write      # tag and GitHub release
-      pull-requests: read  # find the merged release PR
-      id-token: write      # crates.io trusted publishing
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      # No build cache here: a poisoned cache must not reach a published crate.
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
-        with:
-          command: release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   release-pr:
     name: Release PR
     if: github.repository_owner == 'centrifugal'
