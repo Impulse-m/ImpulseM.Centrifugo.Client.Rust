@@ -173,12 +173,12 @@ Cargo features:
 | `system-proxy` | yes | OS proxy settings via `hyper-util/client-proxy-system` (the matcher; the CONNECT and SOCKS5 handshakes are the SDK's own) |
 | `aws-lc-rs` | yes | rustls crypto provider |
 | `ring` | no | Alternative rustls crypto provider. With both enabled, `aws-lc-rs` is used. With neither, `compile_error!`. |
-
-The `compile_error!` combination (no crypto provider) is excluded from CI's feature-powerset check with `cargo hack --at-least-one-of aws-lc-rs,ring`.
 | `delta` | yes | Fossil delta decoding |
 | `rustls-config` | no | Accept a raw `rustls::ClientConfig` (semver-exempt) |
 | `serde` | yes | Typed JSON payload helpers (`publish_json`, `Publication::json`), §4.6 |
 | `test-util` | no | Public constructors for events and results (`#[non_exhaustive]` blocks struct literals), so apps can unit-test their handlers |
+
+The `compile_error!` combination (no crypto provider) is excluded from CI's feature-powerset check with `cargo hack --at-least-one-of aws-lc-rs,ring`.
 
 Workspace layout (internal, not a public contract):
 
@@ -546,27 +546,30 @@ Errors implement `std::error::Error` with `source()`. `TokenError` is the one ex
 ### 5.2 Proxies and corporate TLS (phase 1)
 
 ```rust
+#[non_exhaustive]
 pub enum ProxyConfig {
     None,                                   // direct connection
     FromEnv,                                // HTTPS_PROXY / HTTP_PROXY / ALL_PROXY, NO_PROXY only
-    Http { url: Url, auth: Option<ProxyAuth> },   // http:// or https:// proxy, CONNECT tunnel
-    Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool },
     System,                                 // default: env vars, then OS settings (macOS System Configuration,
                                             // Windows registry) via hyper-util Matcher::from_system; no PAC
-    Custom(Arc<dyn Fn(&Url) -> Option<ProxyTarget> + MaybeSend + MaybeSync>), // app decides per endpoint
+    #[non_exhaustive] Http { url: Url, auth: Option<ProxyAuth> },   // ProxyConfig::http(url, auth): CONNECT tunnel
+    #[non_exhaustive] Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool },  // ProxyConfig::socks5(..)
+    Custom(CustomProxy),                    // ProxyConfig::custom(|url| -> ProxyTarget): app decides per endpoint
 }
 pub struct ProxyAuth { pub username: String, pub password: String }  // Basic for HTTP, user/pass for SOCKS5; Debug prints the password as "***"
-pub enum ProxyTarget { Direct, Http { url: Url, auth: Option<ProxyAuth> }, Socks5 { url: Url, auth: Option<ProxyAuth>, remote_dns: bool } } // #[non_exhaustive]
+#[non_exhaustive]
+pub enum ProxyTarget { Direct, Http { .. }, Socks5 { .. } }  // ProxyTarget::http(url, auth), ProxyTarget::socks5(url, auth, remote_dns)
 ```
 
 - The tunnel is set up **before** TLS to the Centrifugo host, so `wss://` through a proxy validates the Centrifugo certificate, not the proxy's. For an `https://` proxy, TLS to the proxy comes first.
-- A CONNECT response other than 2xx is a transport error (retried with backoff), reported with the proxy status in the `error` event. A 407 with no credentials configured is reported as a configuration error, and the client keeps retrying, because the app may update the config.
+- A CONNECT response other than 2xx is a transport error (retried with backoff), reported with the proxy status in the `error` event (`ClientErrorKind::Transport { status: Some(407), .. }` for missing or wrong credentials). The client keeps retrying, because the app may update the config with `set_proxy()`.
 - The whole proxy handshake counts toward `handshake_timeout`.
+- Plain `ws://`/`http://` endpoints are tunnelled with CONNECT too (to port 80), never sent as absolute-URI proxy requests, so both transports share one path. Proxies that allow CONNECT only to TLS ports (Squid's default) refuse it; the docs say to use `wss://`/`https://` there.
 - `NO_PROXY` matching follows curl rules (host suffixes, `*`, IPs; CIDR in phase 2).
 - Proxy credentials are never logged.
 - **Proxy auth is Basic (HTTP) and username/password (SOCKS5) only.** NTLM and Kerberos (Negotiate) aren't supported. The documented workaround for NTLM-only corporate proxies is a local helper such as Px or Cntlm, used as a plain HTTP proxy. Native NTLM/Kerberos is added only if users confirm they need it. The users who asked for proxy support are being asked.
 - Changing the proxy at runtime: `client.set_proxy(ProxyConfig)` takes effect on the next connect attempt (phase 1). The app can call `disconnect()` + `connect()` to apply it at once.
-- TLS trust: by default the OS verifier via `rustls-platform-verifier`, which uses the OS store and its trust settings. On Linux it uses the system bundle (`SSL_CERT_FILE` honoured) plus `webpki-roots` as extra roots. Corporate TLS-inspecting proxies install their CA in the OS store, so the OS store must be used (§3.2). `TlsConfig` can add PEM CAs (`Verifier::new_with_extra_roots`), skip verification for development only (`danger_accept_invalid_certs`, which logs a warning on every connect), or take a full `rustls::ClientConfig` behind the `rustls-config` feature.
+- TLS trust: by default the OS verifier via `rustls-platform-verifier`, which uses the OS store and its trust settings. On Linux it uses the system bundle (`SSL_CERT_FILE` honoured); no roots are bundled (§15 #26). Corporate TLS-inspecting proxies install their CA in the OS store, so the OS store must be used (§3.2). `TlsConfig` can add PEM CAs (`Verifier::new_with_extra_roots`), skip verification for development only (`danger_accept_invalid_certs`, which logs a warning on every connect), or take a full `rustls::ClientConfig` behind the `rustls-config` feature.
 - The proxy and TLS stack is one connector: DNS and TCP (each address in turn, with a share of the handshake timeout), the CONNECT or SOCKS5 handshake, then `tokio-rustls`. Both transports use it, so proxy and TLS behaviour can't differ between WebSocket and HTTP-streaming.
 
 ### 5.3 Framing

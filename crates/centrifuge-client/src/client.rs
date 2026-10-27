@@ -69,8 +69,9 @@ impl Drop for ClientInner {
 /// handle is dropped.
 ///
 /// Handlers get the client as an argument, so they don't need to capture it.
-/// A handler that captures a `Client` keeps it alive; capture a
-/// [`WeakClient`] instead.
+/// A handler that captures a `Client`, or a [`Subscription`] (which keeps its
+/// client alive), creates a reference cycle and the client is never dropped;
+/// capture a [`WeakClient`] instead.
 ///
 /// ```no_run
 /// # async fn run() -> Result<(), centrifuge::Error> {
@@ -508,11 +509,11 @@ impl Client {
     pub fn events(&self) -> EventStream<ClientEvent> {
         let shared = &self.inner.shared;
         let mut slot = lock(&shared.events_stream);
-        let rx = slot.open();
+        let (rx, tail) = slot.open();
         if lock(&shared.close_waiters).is_none() {
             slot.close();
         }
-        EventStream::new(rx)
+        EventStream::new(rx, tail)
     }
 }
 

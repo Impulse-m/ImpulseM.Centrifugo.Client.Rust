@@ -356,3 +356,12 @@ fn validate_payload_rules() {
         assert!(validate_payload(Protocol::Json, "d", b"hello").is_err());
     }
 }
+
+#[test]
+fn protobuf_stream_cut_short_is_truncated_not_clean() {
+    let mut d = StreamDecoder::new(Protocol::Protobuf, 1 << 20);
+    let mut out = Vec::new();
+    // A length prefix of 10 (0x0a, also b'\n'), then nothing.
+    d.push(&[0x0a], &mut out).unwrap();
+    assert!(matches!(d.finish(), Err(DecodeError::Truncated)));
+}

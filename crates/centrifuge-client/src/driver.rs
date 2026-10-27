@@ -572,6 +572,9 @@ impl Driver {
         // Whatever stopped the driver, the client is closed from now on.
         self.shared.stop.send_replace(true);
         self.shared.snapshot.send_modify(|s| {
+            // Every op is settled: nothing queued will ever be applied, so the
+            // projected state of an unapplied connect() must not linger.
+            s.applied_seq = u64::MAX;
             s.state = State::Closed;
             s.ready = false;
             s.session = None;

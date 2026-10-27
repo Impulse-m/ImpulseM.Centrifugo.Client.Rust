@@ -110,7 +110,9 @@ while let Some(p) = publications.next().await {
 
 Handlers run one at a time on a thread of the client's own by default (`EventDelivery::Thread`). A slow handler never blocks the async runtime or another client. `EventDelivery::Inline` runs them on the client's task instead, for tools running thousands of clients.
 
-**While a handler runs, the client processes nothing else.** That makes the event order a guarantee, so a handler can unsubscribe or disconnect and see no further event. It also means a handler can't wait for the client to make progress: `ready()` or a call that would have to wait for the connection fails with `Error::WouldDeadlock` instead of hanging. Calls on a connected client work, and with the default thread delivery a handler may even block on one (`Handle::block_on`). Spawn anything that needs to wait.
+**While a handler runs, the client processes nothing else.** That makes the event order a guarantee, so a handler can unsubscribe or disconnect and see no further event. It also means a handler can't wait for the client to make progress: `ready()` or a call that would have to wait for the connection fails with `Error::WouldDeadlock` instead of hanging. Calls on a connected client work, and with the default thread delivery a handler may even block on one (`Handle::block_on`), though this client's events wait for as long as it blocks. Spawn anything that needs to wait.
+
+Handlers get their `Client` or `Subscription` as an argument: use that rather than capturing a handle. A handler that captures one keeps the client alive through its own handler (a reference cycle); capture a `WeakClient` (`client.downgrade()`) if it must hold on to the client.
 
 ### Recovery and exactly-once delivery
 
@@ -149,7 +151,7 @@ let client = Client::builder_with_transports([
 .build()?;
 ```
 
-The first round tries each transport at once. After that, the transport that worked is kept. HTTP-streaming uses Centrifugo's bidirectional emulation: commands go to `/emulation` on the same origin. Proxies are HTTP(S) CONNECT (Basic auth) or SOCKS5 (username/password, local or remote DNS). They can come from the environment (`HTTPS_PROXY`, `NO_PROXY`, …), from the OS (macOS, Windows), or be decided per endpoint with `ProxyConfig::custom`. `client.set_proxy()` changes them for the next connect.
+The first round tries each transport at once. After that, the transport that worked is kept. HTTP-streaming uses Centrifugo's bidirectional emulation: commands go to `/emulation` on the same origin. Proxies are HTTP(S) CONNECT (Basic auth) or SOCKS5 (username/password, local or remote DNS). They can come from the environment (`HTTPS_PROXY`, `NO_PROXY`, …), from the OS (macOS, Windows), or be decided per endpoint with `ProxyConfig::custom`. `client.set_proxy()` changes them for the next connect. Plain `ws://` and `http://` endpoints also go through an HTTP proxy with CONNECT, to port 80, which some proxies refuse by default (Squid allows CONNECT only to TLS ports): use `wss://`/`https://` behind such a proxy.
 
 ### Desktop apps and Tauri
 

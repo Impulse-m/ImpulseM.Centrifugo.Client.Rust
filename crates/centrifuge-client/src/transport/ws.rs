@@ -163,10 +163,9 @@ async fn writer(
             Err(e) => {
                 fail_calls(
                     &ctx.shared,
-                    &reqs,
+                    &mut reqs,
                     &crate::Error::InvalidData(e.to_string()),
                 );
-                mark_sent(&mut reqs, false);
                 continue;
             }
         };
@@ -188,15 +187,13 @@ async fn writer(
             let sent = tokio::select! {
                 r = sink.send(msg) => r,
                 _ = closing.wait_for(|c| *c) => {
-                    fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
-                    mark_sent(&mut reqs, false);
+                    fail_calls(&ctx.shared, &mut reqs, &crate::Error::ClientDisconnected);
                     return;
                 }
             };
             if let Err(e) = sent {
                 ok = false;
-                fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
-                mark_sent(&mut reqs, false);
+                fail_calls(&ctx.shared, &mut reqs, &crate::Error::ClientDisconnected);
                 // Let the reader finish what's buffered first, so a server close
                 // code that explains the failure wins (§5.1).
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -212,7 +209,7 @@ async fn writer(
         if !ok {
             return;
         }
-        mark_sent(&mut reqs, true);
+        mark_sent(&mut reqs);
     }
     // Graceful close in the background; never waits for the peer for long.
     let close = Message::Close(Some(tungstenite::protocol::CloseFrame {

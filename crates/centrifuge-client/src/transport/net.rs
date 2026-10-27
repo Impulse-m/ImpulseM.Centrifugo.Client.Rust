@@ -447,7 +447,6 @@ fn basic(a: &ProxyAuth) -> String {
     )
 }
 
-/// An HTTP CONNECT tunnel (docs/spec.md §5.2).
 /// The host of a URL as a name or a bare address: an IPv6 literal without its
 /// URL brackets (`::1`, not `[::1]`), as TLS server names, socket addresses
 /// and SOCKS targets want it.
@@ -460,6 +459,7 @@ fn host_of(url: &Url) -> Result<String, NetError> {
     }
 }
 
+/// An HTTP CONNECT tunnel (docs/spec.md §5.2).
 async fn http_connect(
     mut io: BoxIo,
     host: &str,

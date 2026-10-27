@@ -141,7 +141,7 @@ impl ProxyTarget {
 }
 
 /// A per-endpoint proxy decision function (see [`ProxyConfig::custom`]).
-pub trait ProxyFn: Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync {}
+pub(crate) trait ProxyFn: Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync {}
 impl<F: Fn(&Url) -> ProxyTarget + MaybeSend + MaybeSync> ProxyFn for F {}
 
 /// The function of [`ProxyConfig::Custom`]: opaque, build it with
@@ -156,6 +156,10 @@ impl std::fmt::Debug for CustomProxy {
 }
 
 /// Proxy configuration (docs/spec.md §5.2).
+///
+/// Plain `ws://`/`http://` endpoints also go through an HTTP proxy with
+/// CONNECT (to port 80), which some proxies refuse by default (Squid allows
+/// CONNECT only to TLS ports); use `wss://`/`https://` behind such a proxy.
 ///
 /// Built with the unit variants, [`ProxyConfig::http`],
 /// [`ProxyConfig::socks5`] or [`ProxyConfig::custom`].

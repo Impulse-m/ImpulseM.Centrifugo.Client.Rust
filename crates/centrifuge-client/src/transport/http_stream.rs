@@ -229,8 +229,7 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
             .collect();
         let had_pong = cmds.iter().any(|c| *c == proto::Command::default());
         let Some((session, node)) = emu else {
-            fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
-            mark_sent(&mut reqs, false);
+            fail_calls(&ctx.shared, &mut reqs, &crate::Error::ClientDisconnected);
             continue;
         };
         let frames = match encode_frames(ctx.protocol, &cmds) {
@@ -238,10 +237,9 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
             Err(e) => {
                 fail_calls(
                     &ctx.shared,
-                    &reqs,
+                    &mut reqs,
                     &crate::Error::InvalidData(e.to_string()),
                 );
-                mark_sent(&mut reqs, false);
                 continue;
             }
         };
@@ -252,7 +250,7 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
                 Err(e) => {
                     fail_calls(
                         &ctx.shared,
-                        &reqs,
+                        &mut reqs,
                         &crate::Error::InvalidData(e.to_string()),
                     );
                     continue;
@@ -266,8 +264,7 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
                 Err(PostError::Close(reason)) => {
                     // 404 (the session's node is gone), 5xx, a network error, a
                     // hang: the outcome is unknown, so close and reconnect (§5.7).
-                    fail_calls(&ctx.shared, &reqs, &crate::Error::ClientDisconnected);
-                    mark_sent(&mut reqs, false);
+                    fail_calls(&ctx.shared, &mut reqs, &crate::Error::ClientDisconnected);
                     ctx.closed(reason).await;
                     return;
                 }
@@ -275,13 +272,12 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
                     // E.g. 413: only this request's commands fail.
                     fail_calls(
                         &ctx.shared,
-                        &reqs,
+                        &mut reqs,
                         &crate::Error::Transport {
                             status: Some(status),
                             message: format!("emulation request rejected with status {status}"),
                         },
                     );
-                    mark_sent(&mut reqs, false);
                     ctx.report(Inbound::WriteFailed {
                         transport: ctx.id,
                         command_ids: core_ids.clone(),
@@ -291,7 +287,7 @@ async fn emulation_writer(ctx: Ctx, mut rx: mpsc::UnboundedReceiver<WriteReq>) {
                 }
             }
         }
-        mark_sent(&mut reqs, true);
+        mark_sent(&mut reqs);
     }
 }
 

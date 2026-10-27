@@ -240,7 +240,8 @@ async fn wait_reply(
     Err(Error::Timeout)
 }
 
-/// `send()`: fire and forget, resolves once queued on a connected transport.
+/// `send()`: fire and forget (no reply), resolves once written to a connected
+/// transport.
 pub(crate) async fn send(shared: &Arc<Shared>, cmd: proto::Command) -> Result<(), Error> {
     let deadline =
         tokio::time::Instant::now() + shared.cfg.timeout.min(crate::config::MAX_DURATION);
@@ -258,9 +259,9 @@ pub(crate) async fn send(shared: &Arc<Shared>, cmd: proto::Command) -> Result<()
         .send(WriteReq::send(cmd, &session, tx))
         .map_err(|_| Error::ClientDisconnected)?;
     match tokio::time::timeout_at(deadline, rx).await {
-        Ok(Ok(true)) => Ok(()),
-        // Not written, or the transport went away with it queued.
-        Ok(Ok(false) | Err(_)) => Err(Error::ClientDisconnected),
+        Ok(Ok(written)) => written,
+        // The transport went away with it queued.
+        Ok(Err(_)) => Err(Error::ClientDisconnected),
         Err(_) => Err(Error::Timeout),
     }
 }
@@ -277,6 +278,10 @@ pub(crate) async fn client_ready(shared: &Shared, timeout: Option<Duration>) -> 
         loop {
             {
                 let snap = rx.borrow_and_update();
+                // Closed is final: nothing after it is ever applied.
+                if snap.state == State::Closed {
+                    return Err(Error::ClientClosed);
+                }
                 let state = if nested || snap.applied_seq < seq {
                     shared.state()
                 } else {

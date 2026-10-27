@@ -113,7 +113,9 @@ impl Rng {
             return lo;
         }
         let span = u64::try_from(hi.saturating_sub(lo).as_micros()).unwrap_or(u64::MAX);
-        lo + Duration::from_micros(self.next_u64() % (span + 1))
+        lo.saturating_add(Duration::from_micros(
+            self.next_u64() % span.saturating_add(1),
+        ))
     }
 }
 

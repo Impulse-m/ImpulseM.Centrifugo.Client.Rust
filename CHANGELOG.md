@@ -24,9 +24,3 @@ The first usable release: phase 1 of [`docs/spec.md`](docs/spec.md).
 - Proxies: HTTP(S) CONNECT and SOCKS5 with auth, environment variables, OS settings (macOS, Windows), per-endpoint decisions; TLS with the OS trust store and extra roots.
 - `statistics()`, `WeakClient`, `EventDelivery::{Thread, Inline}`, `WouldDeadlock` detection for calls from handlers.
 - Examples, benchmarks, a TLA+ model trace replay of the core.
-
-## [0.0.1]
-
-### Added
-
-- Initial placeholder release reserving the `centrifuge-client` crate name. Not usable yet; see `docs/spec.md`.

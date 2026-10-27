@@ -72,7 +72,7 @@ pub use centrifuge_client_core::types::{
 };
 pub use client::{Client, ClientBuilder, ConnectionTokenContext, WeakClient};
 pub use config::{
-    CustomProxy, EventDelivery, Protocol, ProxyAuth, ProxyConfig, ProxyFn, ProxyTarget, TlsConfig,
+    CustomProxy, EventDelivery, Protocol, ProxyAuth, ProxyConfig, ProxyTarget, TlsConfig,
     TransportEndpoint, TransportKind,
 };
 pub use error::{

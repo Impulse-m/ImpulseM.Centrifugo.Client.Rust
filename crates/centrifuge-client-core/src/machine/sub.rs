@@ -1066,7 +1066,11 @@ impl Core {
                 self.timers.cancel(TimerKey::SubRefresh(key));
                 if let Some(s) = self.subs.get_mut(&key) {
                     s.state = SubState::Subscribing;
-                    s.push_id = 0;
+                    let push_id = std::mem::take(&mut s.push_id);
+                    // The id was this subscription's; the resubscribe gets a new one.
+                    if push_id > 0 && self.by_push_id.get(&push_id) == Some(&key) {
+                        self.by_push_id.remove(&push_id);
+                    }
                 }
                 out.event(Event::Subscribing {
                     sub: key,

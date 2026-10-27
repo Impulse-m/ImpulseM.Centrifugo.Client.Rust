@@ -309,7 +309,13 @@ impl StreamDecoder {
     /// [`DecodeError::Truncated`] if a message was left incomplete.
     pub fn finish(&self) -> Result<(), DecodeError> {
         let rest: &[u8] = &self.buf;
-        let only_blank = rest.iter().all(|b| matches!(b, b'\n' | b'\r'));
+        // Blank lines are filler only in JSON; in Protobuf any leftover byte is
+        // a message cut short.
+        let only_blank = if self.protocol == Protocol::Protobuf {
+            rest.is_empty()
+        } else {
+            rest.iter().all(|b| matches!(b, b'\n' | b'\r'))
+        };
         if only_blank {
             Ok(())
         } else {

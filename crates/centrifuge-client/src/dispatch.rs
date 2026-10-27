@@ -98,8 +98,19 @@ pub(crate) struct SubHandlers {
 /// consumer's `next()` takes it (§9.4). At most one per kind and object; a new
 /// one takes over and the old one ends.
 pub(crate) struct StreamSlot<T> {
-    tx: Option<mpsc::Sender<(T, oneshot::Sender<()>)>>,
+    tx: Option<Offerer<T>>,
 }
+
+/// Where a stream's items are offered: its one-slot channel and its tail.
+type Offerer<T> = (mpsc::Sender<(T, oneshot::Sender<()>)>, Tail<T>);
+
+/// Items offered while the stream's slot was still full, which only happens
+/// once the client is stopping (nobody waits then): the stream yields them
+/// after the channel, before it ends, so the final events aren't lost.
+pub(crate) type Tail<T> = Arc<std::sync::Mutex<std::collections::VecDeque<T>>>;
+
+/// Bound on [`Tail`]: a close emits one event per stream.
+const TAIL_MAX: usize = 16;
 
 impl<T> Default for StreamSlot<T> {
     fn default() -> Self {
@@ -108,18 +119,19 @@ impl<T> Default for StreamSlot<T> {
 }
 
 impl<T> StreamSlot<T> {
-    pub(crate) fn open(&mut self) -> mpsc::Receiver<(T, oneshot::Sender<()>)> {
+    pub(crate) fn open(&mut self) -> (mpsc::Receiver<(T, oneshot::Sender<()>)>, Tail<T>) {
         let (tx, rx) = mpsc::channel(1);
-        self.tx = Some(tx);
-        rx
+        let tail = Tail::default();
+        self.tx = Some((tx, tail.clone()));
+        (rx, tail)
     }
 
     pub(crate) fn close(&mut self) {
         self.tx = None;
     }
 
-    fn sender(&self) -> Option<mpsc::Sender<(T, oneshot::Sender<()>)>> {
-        self.tx.as_ref().filter(|t| !t.is_closed()).cloned()
+    fn sender(&self) -> Option<Offerer<T>> {
+        self.tx.as_ref().filter(|(t, _)| !t.is_closed()).cloned()
     }
 }
 
@@ -166,17 +178,16 @@ macro_rules! run_slot {
 /// Hands an item to a stream: offer and wait until it's taken.
 enum Offer<T> {
     Sent(oneshot::Receiver<()>),
-    Gone(T),
+    Full(T),
+    Gone,
 }
 
 fn offer<T>(tx: &mpsc::Sender<(T, oneshot::Sender<()>)>, item: T) -> Offer<T> {
     let (ack_tx, ack_rx) = oneshot::channel();
     match tx.try_send((item, ack_tx)) {
         Ok(()) => Offer::Sent(ack_rx),
-        Err(
-            mpsc::error::TrySendError::Full((item, _))
-            | mpsc::error::TrySendError::Closed((item, _)),
-        ) => Offer::Gone(item),
+        Err(mpsc::error::TrySendError::Full((item, _))) => Offer::Full(item),
+        Err(mpsc::error::TrySendError::Closed(_)) => Offer::Gone,
     }
 }
 
@@ -511,20 +522,21 @@ impl Delivery {
     }
 }
 
-fn hand_off<T>(
-    tx: &mpsc::Sender<(T, oneshot::Sender<()>)>,
-    item: T,
-    waits: &mut Pending,
-    _blocking: bool,
-) {
+fn hand_off<T>((tx, tail): &Offerer<T>, item: T, waits: &mut Pending, _blocking: bool) {
     // The channel has room for one item; it's empty here, because every
-    // previous offer was waited for before (unless the client is stopping,
-    // when nobody waits and a full channel drops the item).
+    // previous offer was waited for before, unless the client is stopping
+    // (nobody waits then): the item goes to the tail.
     match offer(tx, item) {
         // The driver waits until the consumer's next() takes it. A dropped
         // stream drops the ack: it counts as taken (no listener).
         Offer::Sent(ack) => waits.push(ack),
-        Offer::Gone(_) => {}
+        Offer::Full(item) => {
+            let mut t = lock(tail);
+            if t.len() < TAIL_MAX {
+                t.push_back(item);
+            }
+        }
+        Offer::Gone => {}
     }
 }
 

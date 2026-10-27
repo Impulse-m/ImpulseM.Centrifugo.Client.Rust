@@ -313,22 +313,22 @@ impl Subscription {
     /// removal.
     pub fn events(&self) -> EventStream<SubscriptionEvent> {
         let mut slot = lock(&self.inner.events_stream);
-        let rx = slot.open();
+        let (rx, tail) = slot.open();
         if self.removed() || lock(&self.client.shared().close_waiters).is_none() {
             slot.close();
         }
-        EventStream::new(rx)
+        EventStream::new(rx, tail)
     }
 
     /// The publications as a stream, with hand-off delivery. One at a time; it
     /// ends on `close()` and after removal.
     pub fn publications(&self) -> EventStream<PublicationEvent> {
         let mut slot = lock(&self.inner.publications_stream);
-        let rx = slot.open();
+        let (rx, tail) = slot.open();
         if self.removed() || lock(&self.client.shared().close_waiters).is_none() {
             slot.close();
         }
-        EventStream::new(rx)
+        EventStream::new(rx, tail)
     }
 }
 

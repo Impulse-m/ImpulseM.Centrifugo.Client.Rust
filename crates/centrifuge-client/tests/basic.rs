@@ -404,3 +404,29 @@ async fn send_resolves_when_written() {
     assert!(r.is_err(), "not written: {r:?}");
     client.close().await;
 }
+
+/// A `send()` whose emulation request the server rejects (e.g. 413) fails with
+/// the transport's status, as documented, not as a disconnect.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_send_reports_the_status() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::HttpStream, Protocol::Json)
+        .build()
+        .unwrap();
+    client.connect().unwrap();
+    client.ready(None).await.unwrap();
+    srv.emulation_status(Some(413));
+    let r = client.send(r#"{"big":1}"#).await;
+    assert!(
+        matches!(
+            r,
+            Err(Error::Transport {
+                status: Some(413),
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    srv.emulation_status(None);
+    client.close().await;
+}

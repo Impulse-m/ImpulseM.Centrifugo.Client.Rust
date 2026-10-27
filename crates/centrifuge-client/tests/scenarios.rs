@@ -827,3 +827,69 @@ fn runtime_shutdown_releases_waiters() {
         assert!(end.is_ok(), "the stream ends");
     });
 }
+
+/// A `connect()` queued but never applied when the driver dies: `ready()` fails
+/// with `ClientClosed`, `state()` reads Closed and `connect()` is refused (review
+/// finding: `ready()` hung on the projected Connecting).
+#[test]
+fn driver_dies_with_unapplied_ops() {
+    let main = tokio::runtime::Runtime::new().unwrap();
+    // A current-thread runtime nobody drives: the driver never runs.
+    let idle = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let srv = main.block_on(server());
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Json)
+        .runtime(idle.handle().clone())
+        .build()
+        .unwrap();
+    client.connect().unwrap();
+    assert_eq!(client.state(), State::Connecting);
+    drop(idle);
+    main.block_on(async {
+        let r = tokio::time::timeout(Duration::from_secs(2), client.ready(None))
+            .await
+            .expect("ready() returns");
+        assert!(matches!(r, Err(Error::ClientClosed)), "{r:?}");
+    });
+    assert_eq!(client.state(), State::Closed);
+    assert!(matches!(client.connect(), Err(Error::ClientClosed)));
+}
+
+/// A consumer busy with an item when `close()` runs (the next one already
+/// offered) still gets the final unsubscribed event before the stream ends
+/// (review finding: it was dropped because the slot was full).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn busy_stream_keeps_the_close_event() {
+    let srv = server().await;
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    let sub = client.new_subscription("busy").build().unwrap();
+    let mut events = sub.events();
+    sub.subscribe();
+    client.connect().unwrap();
+    while !matches!(events.next().await, Some(SubscriptionEvent::Subscribed(_))) {}
+    srv.publish("busy", "1");
+    srv.publish("busy", "2");
+    assert!(matches!(
+        events.next().await,
+        Some(SubscriptionEvent::Publication(_))
+    ));
+    // Busy with publication 1; publication 2 is offered meanwhile.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(2), client.close())
+        .await
+        .unwrap();
+    let rest: Vec<_> = events.collect().await;
+    assert_eq!(rest.len(), 2, "{rest:?}");
+    assert!(
+        matches!(&rest[0], SubscriptionEvent::Publication(p) if &p.data[..] == b"2"),
+        "{rest:?}"
+    );
+    assert!(
+        matches!(&rest[1], SubscriptionEvent::Unsubscribed(_)),
+        "{rest:?}"
+    );
+}

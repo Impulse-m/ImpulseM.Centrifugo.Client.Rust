@@ -36,7 +36,7 @@ pub(crate) struct WriteReq {
     #[cfg_attr(not(feature = "http-stream"), allow(dead_code))]
     pub(crate) emu: Option<(String, String)>,
     /// A `send()` waiting to know it was written.
-    pub(crate) sent: Option<tokio::sync::oneshot::Sender<bool>>,
+    pub(crate) sent: Option<tokio::sync::oneshot::Sender<Result<(), crate::Error>>>,
 }
 
 impl WriteReq {
@@ -59,7 +59,7 @@ impl WriteReq {
     pub(crate) fn send(
         cmd: proto::Command,
         s: &SessionHandle,
-        sent: tokio::sync::oneshot::Sender<bool>,
+        sent: tokio::sync::oneshot::Sender<Result<(), crate::Error>>,
     ) -> Self {
         Self {
             cmds: vec![cmd],
@@ -293,20 +293,25 @@ fn decode_close(e: &DecodeError) -> CloseReason {
     }
 }
 
-/// Fails the fast-path calls of failed requests.
-fn fail_calls(shared: &Shared, reqs: &[WriteReq], err: &crate::Error) {
+/// Fails the fast-path calls of failed requests, and their `send()`s, with
+/// `err` (e.g. `Transport { status: 413 }` for a rejected emulation request).
+fn fail_calls(shared: &Shared, reqs: &mut [WriteReq], err: &crate::Error) {
     let mut calls = lock(&shared.calls);
     for r in reqs {
         for id in &r.call_ids {
             calls.fail(*id, err.clone());
         }
+        if let Some(tx) = r.sent.take() {
+            let _ = tx.send(Err(err.clone()));
+        }
     }
 }
 
-fn mark_sent(reqs: &mut [WriteReq], ok: bool) {
+/// The requests were written: their `send()`s resolve.
+fn mark_sent(reqs: &mut [WriteReq]) {
     for r in reqs {
         if let Some(tx) = r.sent.take() {
-            let _ = tx.send(ok);
+            let _ = tx.send(Ok(()));
         }
     }
 }

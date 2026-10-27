@@ -1782,3 +1782,15 @@ fn refresh_push_only_adjusts_client_side_refresh() {
         "no longer expires: cancelled"
     );
 }
+
+/// Jitter with `Duration::MAX` bounds (a direct core user without the
+/// client's 24 h cap) saturates instead of overflowing.
+#[test]
+fn backoff_jitter_with_huge_bounds_does_not_overflow() {
+    let mut r = Rng::new(1);
+    for _ in 0..100 {
+        let _ = r.between(Duration::ZERO, Duration::MAX);
+        let _ = r.between(Duration::from_secs(1), Duration::MAX);
+    }
+    let _ = super::timers::backoff(&mut r, 1000, Duration::from_millis(500), Duration::MAX);
+}

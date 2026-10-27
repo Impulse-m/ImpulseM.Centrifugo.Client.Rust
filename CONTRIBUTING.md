@@ -88,7 +88,7 @@ Nobody runs `cargo publish` by hand, except for the first publish below.
 
 ### Release setup (one time, maintainers)
 
-1. **First publish.** crates.io trusted publishing can't create a new crate, so publish the first version of both crates once by hand (`0.1.0`, or a `0.0.1` name reservation if it isn't published yet), core first:
+1. **First publish.** crates.io trusted publishing can't create a new crate, so publish the first version (`0.1.0`) of both crates once by hand, core first:
    `cargo publish -p centrifuge-client-core && cargo publish -p centrifuge-client` with a short-lived crates.io token, then revoke the token.
 2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`.
 3. **GitHub environment.** Create an environment named `release` (Settings → Environments). Optionally restrict it to the `main` branch and add required reviewers.
