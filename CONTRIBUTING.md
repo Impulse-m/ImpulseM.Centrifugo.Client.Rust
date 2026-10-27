@@ -88,10 +88,14 @@ Nobody runs `cargo publish` by hand, except for the first publish below.
 
 ### Release setup (one time, maintainers)
 
-1. **First publish.** crates.io trusted publishing can't create a new crate, so publish the first version (`0.1.0`) of both crates once by hand, core first:
-   `cargo publish -p centrifuge-client-core && cargo publish -p centrifuge-client` with a short-lived crates.io token, then revoke the token.
-2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`.
-3. **GitHub environment.** Create an environment named `release` (Settings → Environments). Optionally restrict it to the `main` branch and add required reviewers.
+1. **First publish.** crates.io trusted publishing can't create a new crate, and release-plz treats an unpublished version as already released (no release PR), so publish `0.1.0` of both crates once by hand:
+   - Create a crates.io API token with only the `publish-new` scope, limited to the crates `centrifuge-client-core` and `centrifuge-client`, expiring in a day.
+   - From a clean checkout of the pushed `main` commit (no `--allow-dirty`, so the published `.cargo_vcs_info.json` points at a commit on `main`, which release-plz diffs the next release against), publish the core first:
+     `cargo publish -p centrifuge-client-core && cargo publish -p centrifuge-client`
+   - Revoke the token.
+   - Tag and release that commit, which release-plz doesn't do for a manual publish: `git tag v0.1.0 && git push origin v0.1.0`, then `gh release create v0.1.0 --title v0.1.0 --notes-file <the 0.1.0 section of CHANGELOG.md>`.
+2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`. After the first release through CI works, also turn on **Trusted Publishing Only** mode there, which rejects token publishes.
+3. **GitHub environment.** Create an environment named `release` (Settings → Environments) and restrict it to the `main` branch. Don't add required reviewers: the release job runs on every push to `main` (it publishes only for a merged release PR), so reviewers would gate every merge. Merging the release PR is the approval.
 4. **GitHub App for release PRs.** PRs opened with the default `GITHUB_TOKEN` don't trigger CI.
    - Create (or reuse) an org GitHub App with *Contents: read & write* and *Pull requests: read & write*, and install it on this repository.
    - Store its client ID as the repository variable `RELEASE_PLZ_APP_CLIENT_ID`, and its private key as the secret `RELEASE_PLZ_APP_PRIVATE_KEY`.
