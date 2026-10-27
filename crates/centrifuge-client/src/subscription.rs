@@ -71,6 +71,11 @@ pub enum DeltaType {
 /// Cheap to clone. Holding one keeps its client alive. Dropping the last
 /// handle doesn't unsubscribe: the subscription stays registered and
 /// [`Client::get_subscription`] finds it.
+///
+/// Handlers get the subscription as an argument; one captured in a handler
+/// creates a reference cycle (see [`Client`]), so capture a
+/// [`WeakClient`](crate::WeakClient) and look it up with
+/// [`Client::get_subscription`].
 #[derive(Clone)]
 pub struct Subscription {
     inner: Arc<SubInner>,
