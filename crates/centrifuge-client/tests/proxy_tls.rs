@@ -168,11 +168,13 @@ fn endpoints(srv: &centrifuge_fake_server::FakeServer, host: &str) -> [Transport
 async fn connect_through(ep: TransportEndpoint, proxy: ProxyConfig) -> Client {
     let client = Client::builder_with_transports([ep])
         .proxy(proxy)
-        .timeout(Duration::from_secs(2))
+        // Room for Windows, where a refused connect (to `::1` when `localhost`
+        // resolves to both families) takes about 2 s.
+        .timeout(Duration::from_secs(6))
         .build()
         .unwrap();
     client.connect().unwrap();
-    client.ready(Some(Duration::from_secs(5))).await.unwrap();
+    client.ready(Some(Duration::from_secs(10))).await.unwrap();
     client
 }
 
@@ -378,11 +380,15 @@ async fn tls_untrusted_certificate_is_refused() {
         .build()
         .unwrap();
     client.connect().unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert_eq!(client.state(), State::Connecting);
-    assert_eq!(srv.connects(), 0);
+    // The OS verifier can take seconds (Windows builds the chain first).
+    let end = tokio::time::Instant::now() + Duration::from_secs(15);
+    while errors.lock().unwrap().is_empty() && tokio::time::Instant::now() < end {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let errors = errors.lock().unwrap().clone();
     assert!(!errors.is_empty(), "the verification failure is reported");
+    assert_eq!(client.state(), State::Connecting);
+    assert_eq!(srv.connects(), 0);
     assert!(matches!(
         TlsConfig::new().add_root_pem(b"not a pem"),
         Err(Error::Configuration(_))
