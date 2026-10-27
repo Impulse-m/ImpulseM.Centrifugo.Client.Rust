@@ -20,7 +20,7 @@ exclude = ["/tests"]
 name = "centrifuge"
 
 [dependencies]
-centrifuge-core = { workspace = true }
+centrifuge-client-core = { workspace = true }
 bytes = "1.12"
 futures-core = "0.3.31"
 futures-util = { version = "0.3.31", default-features = false, features = ["std", "sink"] }
@@ -57,7 +57,7 @@ required-features = ["serde"]
 default = ["protobuf", "json", "http-stream", "system-proxy", "aws-lc-rs", "delta", "serde"]
 # Protocol codecs. Protobuf is the default protocol.
 protobuf = []
-json = ["centrifuge-core/json"]
+json = ["centrifuge-client-core/json"]
 # HTTP-streaming transport (with bidirectional emulation) and fallback.
 http-stream = ["dep:hyper", "dep:http-body-util"]
 # OS proxy settings (macOS System Configuration, Windows registry).
@@ -68,7 +68,7 @@ ring = ["rustls/ring", "tokio-rustls/ring"]
 # Fossil delta decoding (always compiled into the core; the flag gates asking for it).
 delta = []
 # Typed JSON helpers (`publish_json`, `Publication::json`, …).
-serde = ["dep:serde", "dep:serde_json", "centrifuge-core/json"]
+serde = ["dep:serde", "dep:serde_json", "centrifuge-client-core/json"]
 # Accept a raw `rustls::ClientConfig` (semver-exempt: rustls is pre-1.0).
 rustls-config = []
 # Constructors for events and results, for unit-testing handlers.

@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use centrifuge_core::machine::{State, SubState, TransportId};
-use centrifuge_core::proto;
+use centrifuge_client_core::machine::{State, SubState, TransportId};
+use centrifuge_client_core::proto;
 use tokio::sync::oneshot;
 
 use crate::dispatch::{in_callback, in_handler};

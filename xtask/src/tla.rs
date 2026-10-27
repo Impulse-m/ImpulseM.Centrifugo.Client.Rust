@@ -1,5 +1,5 @@
 //! `cargo xtask tla-traces`: generates the TLA+ traces that
-//! `crates/centrifuge-core/tests/tla_replay.rs` replays (docs/spec.md §11.1).
+//! `crates/centrifuge-client-core/tests/tla_replay.rs` replays (docs/spec.md §11.1).
 //!
 //! It runs TLC in simulation mode on a copy of the SDK model (the model's
 //! directory is only read), with `tests/tla/Replay.tla` narrowing the
@@ -84,7 +84,7 @@ pub(crate) fn check(root: &Path, only: &[String]) -> Res<()> {
         std::fs::copy(model.join(f), work.join(f))?;
     }
     std::fs::copy(
-        root.join("crates/centrifuge-core/tests/tla/Replay.tla"),
+        root.join("crates/centrifuge-client-core/tests/tla/Replay.tla"),
         work.join("Replay.tla"),
     )?;
     let mut failed = Vec::new();
@@ -154,7 +154,7 @@ pub(crate) fn traces(root: &Path) -> Res<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(150);
-    let tests = root.join("crates/centrifuge-core/tests/tla");
+    let tests = root.join("crates/centrifuge-client-core/tests/tla");
     let out_dir = tests.join("traces");
     std::fs::create_dir_all(&out_dir)?;
     let work = std::env::temp_dir().join("centrifuge-xtask-tla");

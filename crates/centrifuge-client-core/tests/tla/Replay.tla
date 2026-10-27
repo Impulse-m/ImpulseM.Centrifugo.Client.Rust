@@ -1,6 +1,6 @@
 ------------------------------- MODULE Replay -------------------------------
 (***************************************************************************)
-(* Trace generation for replaying the SDK model into centrifuge-core      *)
+(* Trace generation for replaying the SDK model into centrifuge-client-core      *)
 (* (docs/spec.md §11.1). It extends the model unchanged and only narrows  *)
 (* which of its behaviours are generated, to the schedules this SDK        *)
 (* implements:                                                             *)

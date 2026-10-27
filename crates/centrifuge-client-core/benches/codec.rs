@@ -1,12 +1,12 @@
 //! Codec, stream reassembly and delta benchmarks (docs/spec.md §11.1).
 //!
-//! `cargo bench -p centrifuge-core`
+//! `cargo bench -p centrifuge-client-core`
 
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)] // benchmarks
 
 use bytes::Bytes;
-use centrifuge_core::codec::{self, Protocol, StreamDecoder};
-use centrifuge_core::{delta, proto};
+use centrifuge_client_core::codec::{self, Protocol, StreamDecoder};
+use centrifuge_client_core::{delta, proto};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use prost::Message as _;
 

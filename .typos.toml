@@ -7,7 +7,7 @@ fo = "fo"
 [files]
 extend-exclude = [
   # Upstream test data (fossil delta vectors) and generated code.
-  "crates/centrifuge-core/testdata/",
-  "crates/centrifuge-core/src/proto/generated.rs",
-  "crates/centrifuge-core/tests/tla/",
+  "crates/centrifuge-client-core/testdata/",
+  "crates/centrifuge-client-core/src/proto/generated.rs",
+  "crates/centrifuge-client-core/tests/tla/",
 ]

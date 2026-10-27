@@ -6,7 +6,7 @@ name: Benchmarks
 on:
   pull_request:
     paths:
-      - "crates/centrifuge-core/**"
+      - "crates/centrifuge-client-core/**"
       - "Cargo.lock"
   workflow_dispatch:
 
@@ -36,10 +36,10 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: |
           git worktree add --detach ../base "$BASE"
-          (cd ../base && cargo bench -p centrifuge-core --bench codec -- --save-baseline base --warm-up-time 1 --measurement-time 3)
+          (cd ../base && cargo bench -p centrifuge-client-core --bench codec -- --save-baseline base --warm-up-time 1 --measurement-time 3)
           mkdir -p target/criterion && cp -r ../base/target/criterion/. target/criterion/
       - name: This branch
-        run: cargo bench -p centrifuge-core --bench codec -- --baseline base --warm-up-time 1 --measurement-time 3 | tee bench.txt
+        run: cargo bench -p centrifuge-client-core --bench codec -- --baseline base --warm-up-time 1 --measurement-time 3 | tee bench.txt
       - name: Summary
         run: |
           {

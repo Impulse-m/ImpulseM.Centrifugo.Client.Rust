@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use centrifuge_core::codec::{self, DecodeError, Protocol};
-use centrifuge_core::machine::{CloseReason, TransportId, TransportKind};
-use centrifuge_core::proto;
+use centrifuge_client_core::codec::{self, DecodeError, Protocol};
+use centrifuge_client_core::machine::{CloseReason, TransportId, TransportKind};
+use centrifuge_client_core::proto;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use url::Url;
 

@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-centrifuge-core = { workspace = true, features = ["json"] }
+centrifuge-client-core = { workspace = true, features = ["json"] }
 bytes = "1.12"
 futures-util = { version = "0.3.31", default-features = false, features = ["std", "sink"] }
 http-body-util = "0.1.3"

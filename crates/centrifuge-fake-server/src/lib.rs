@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bytes::Bytes;
-pub use centrifuge_core::proto;
+pub use centrifuge_client_core::proto;
 pub use codec::Protocol;
 use tokio::sync::{mpsc, watch};
 

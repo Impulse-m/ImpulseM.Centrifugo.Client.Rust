@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Weak};
 
-use centrifuge_core::machine::Event;
-use centrifuge_core::types::Publication;
+use centrifuge_client_core::machine::Event;
+use centrifuge_client_core::types::Publication;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{Client, ClientInner};

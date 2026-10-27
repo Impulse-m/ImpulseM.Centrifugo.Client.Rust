@@ -1,7 +1,7 @@
 //! Publication tags filter (docs/spec.md §7.9), mirroring `centrifuge-go`.
 //!
 //! ```
-//! use centrifuge_core::filter::Filter;
+//! use centrifuge_client_core::filter::Filter;
 //!
 //! let f = Filter::and([Filter::eq("type", "goal"), Filter::in_("team", ["a", "b"])]);
 //! # let _ = f;

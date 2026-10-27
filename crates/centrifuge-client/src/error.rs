@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-pub use centrifuge_core::machine::{ClientErrorKind, SubscriptionErrorKind};
-pub use centrifuge_core::types::ServerError;
+pub use centrifuge_client_core::machine::{ClientErrorKind, SubscriptionErrorKind};
+pub use centrifuge_client_core::types::ServerError;
 
 /// A boxed error from app code.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;

@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use bytes::Bytes;
-use centrifuge_core::proto;
+use centrifuge_client_core::proto;
 use futures_util::{SinkExt as _, StreamExt as _};
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
 use hyper::body::{Frame, Incoming};

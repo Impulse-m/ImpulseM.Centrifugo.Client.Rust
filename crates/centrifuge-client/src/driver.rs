@@ -8,11 +8,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use centrifuge_core::machine::{
+use centrifuge_client_core::machine::{
     Callback, CallbackError, Core, Event, Input, Op, OpenRequest, Outputs, State, SubKey, SubState,
     TimerKey, TransportId, TransportKind,
 };
-use centrifuge_core::proto;
+use centrifuge_client_core::proto;
 use futures_util::FutureExt as _;
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -34,8 +34,12 @@ pub(crate) type SubTokenGetter =
     Arc<dyn Fn(crate::subscription::SubscriptionTokenContext) -> SubTokenFuture + Send + Sync>;
 pub(crate) type StateFuture = Pin<
     Box<
-        dyn Future<Output = Result<centrifuge_core::types::StreamPosition, crate::error::BoxError>>
-            + Send,
+        dyn Future<
+                Output = Result<
+                    centrifuge_client_core::types::StreamPosition,
+                    crate::error::BoxError,
+                >,
+            > + Send,
     >,
 >;
 pub(crate) type StateGetter =

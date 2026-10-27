@@ -6,10 +6,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
-use centrifuge_core::codec;
-use centrifuge_core::filter::FilterNode;
-use centrifuge_core::machine::{Op, State, SubConfig, SubState};
-use centrifuge_core::types::{
+use centrifuge_client_core::codec;
+use centrifuge_client_core::filter::FilterNode;
+use centrifuge_client_core::machine::{Op, State, SubConfig, SubState};
+use centrifuge_client_core::types::{
     HistoryOptions, HistoryResult, PresenceResult, PresenceStatsResult, StreamPosition,
 };
 

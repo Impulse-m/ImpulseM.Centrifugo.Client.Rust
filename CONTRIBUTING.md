@@ -15,7 +15,7 @@ cargo test --workspace --all-features --locked
 RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo +nightly doc --workspace --no-deps --all-features
 cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring \
   --exclude-features test-util --no-dev-deps        # cargo install cargo-hack
-cargo check -p centrifuge-core --target wasm32-unknown-unknown   # rustup target add wasm32-unknown-unknown
+cargo check -p centrifuge-client-core --target wasm32-unknown-unknown   # rustup target add wasm32-unknown-unknown
 cargo deny check                                    # cargo install cargo-deny
 typos                                               # cargo install typos-cli
 ```
@@ -37,7 +37,7 @@ The ports differ from other SDKs' stacks (8000/8002), so both can run at once.
 
 ### The TLA+ trace replay
 
-`crates/centrifuge-core/src/machine/replay.rs` replays traces of the SDK TLA+ model into the core (docs/spec.md §11.1). The traces are committed under `crates/centrifuge-core/tests/tla/`, so the test needs nothing else. After a change to the model, regenerate them (needs Java and the model, which is in a private repository):
+`crates/centrifuge-client-core/src/machine/replay.rs` replays traces of the SDK TLA+ model into the core (docs/spec.md §11.1). The traces are committed under `crates/centrifuge-client-core/tests/tla/`, so the test needs nothing else. After a change to the model, regenerate them (needs Java and the model, which is in a private repository):
 
 ```sh
 TLA_MODEL=../centrifugo-pro-source/tla/sdk cargo xtask tla-traces
@@ -48,7 +48,7 @@ A divergence names the step and the trace's actions. Either the core is wrong, o
 ### Benchmarks
 
 ```sh
-cargo bench -p centrifuge-core     # codecs, stream reassembly, fossil delta
+cargo bench -p centrifuge-client-core     # codecs, stream reassembly, fossil delta
 ```
 
 Pull requests touching the core get a comparison against their base in the "Benchmarks" workflow's summary.
@@ -60,7 +60,7 @@ Seeded chaos, probes of known bug patterns from other SDKs, real-server chaos an
 ## Layout
 
 - `crates/centrifuge-client`: the SDK. Package `centrifuge-client`, imported as `centrifuge`.
-- `crates/centrifuge-core`: the sans-IO state machine (docs/spec.md §9). It does no IO and has no runtime. It must keep building for `wasm32-unknown-unknown` (checked in CI), so don't add dependencies to it that break that.
+- `crates/centrifuge-client-core`: the sans-IO state machine (docs/spec.md §9). It does no IO and has no runtime. It must keep building for `wasm32-unknown-unknown` (checked in CI), so don't add dependencies to it that break that.
 - `crates/centrifuge-fake-server`: the in-process fake Centrifugo for tests (not published).
 - `xtask`: maintainer tasks (`cargo xtask proto`, `cargo xtask tla-traces`).
 - `docs/spec.md`: the behaviour; `docs/api.md`: the public API on one page; `docs/decisions-pending.md`: implementation choices awaiting review.
@@ -89,8 +89,8 @@ Nobody runs `cargo publish` by hand, except for the first publish below.
 ### Release setup (one time, maintainers)
 
 1. **First publish.** crates.io trusted publishing can't create a new crate, so publish the first version of both crates once by hand (`0.1.0`, or a `0.0.1` name reservation if it isn't published yet), core first:
-   `cargo publish -p centrifuge-core && cargo publish -p centrifuge-client` with a short-lived crates.io token, then revoke the token.
-2. **Trusted publisher.** On crates.io, for **both** `centrifuge-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`.
+   `cargo publish -p centrifuge-client-core && cargo publish -p centrifuge-client` with a short-lived crates.io token, then revoke the token.
+2. **Trusted publisher.** On crates.io, for **both** `centrifuge-client-core` and `centrifuge-client`, go to Settings → Trusted Publishing and add GitHub: owner `centrifugal`, repository `centrifuge-rust`, workflow `release-plz.yml`, environment `release`.
 3. **GitHub environment.** Create an environment named `release` (Settings → Environments). Optionally restrict it to the `main` branch and add required reviewers.
 4. **GitHub App for release PRs.** PRs opened with the default `GITHUB_TOKEN` don't trigger CI.
    - Create (or reuse) an org GitHub App with *Contents: read & write* and *Pull requests: read & write*, and install it on this repository.

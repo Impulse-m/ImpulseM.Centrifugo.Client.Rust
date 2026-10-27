@@ -7,8 +7,8 @@ use url::Url;
 
 use crate::error::Error;
 use crate::maybe_send::{MaybeSend, MaybeSync};
-pub use centrifuge_core::codec::Protocol;
-pub use centrifuge_core::machine::TransportKind;
+pub use centrifuge_client_core::codec::Protocol;
+pub use centrifuge_client_core::machine::TransportKind;
 
 /// One transport endpoint of a fallback list (docs/spec.md §5.8).
 #[derive(Debug, Clone, PartialEq, Eq)]

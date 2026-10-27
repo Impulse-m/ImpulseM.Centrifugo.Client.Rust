@@ -183,7 +183,7 @@ name = "centrifuge-client"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "centrifuge-core",
+ "centrifuge-client-core",
  "centrifuge-fake-server",
  "futures-core",
  "futures-util",
@@ -207,7 +207,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "centrifuge-core"
+name = "centrifuge-client-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -224,7 +224,7 @@ name = "centrifuge-fake-server"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "centrifuge-core",
+ "centrifuge-client-core",
  "futures-util",
  "http-body-util",
  "hyper",

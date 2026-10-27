@@ -5,9 +5,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
-use centrifuge_core::codec::{self, Protocol, StreamDecoder};
-use centrifuge_core::machine::CloseReason;
-use centrifuge_core::proto;
+use centrifuge_client_core::codec::{self, Protocol, StreamDecoder};
+use centrifuge_client_core::machine::CloseReason;
+use centrifuge_client_core::proto;
 use http_body_util::{BodyExt as _, Full};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;

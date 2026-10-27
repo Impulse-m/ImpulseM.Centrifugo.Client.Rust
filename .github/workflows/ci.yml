@@ -222,7 +222,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The sans-IO core must stay free of IO and runtime dependencies, so a
       # browser build stays possible (docs/spec.md §9.11).
-      - run: cargo check -p centrifuge-core --target wasm32-unknown-unknown --locked
+      - run: cargo check -p centrifuge-client-core --target wasm32-unknown-unknown --locked
         env:
           RUSTFLAGS: -D warnings
 

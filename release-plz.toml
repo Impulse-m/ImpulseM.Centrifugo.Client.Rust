@@ -15,7 +15,7 @@ git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
 [[package]]
-name = "centrifuge-core"
+name = "centrifuge-client-core"
 version_group = "centrifuge"
 # Internal crate: no stability promise outside what the client re-exports,
 # and the client's semver check covers the re-exported types.

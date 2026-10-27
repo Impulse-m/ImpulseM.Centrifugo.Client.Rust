@@ -1,7 +1,7 @@
 //! Maintainer tasks. Run with `cargo xtask <task>`.
 //!
-//! - `proto`: regenerate `crates/centrifuge-core/src/proto/generated.rs` from
-//!   `crates/centrifuge-core/proto/client.proto`. Needs `protoc` on `PATH`.
+//! - `proto`: regenerate `crates/centrifuge-client-core/src/proto/generated.rs` from
+//!   `crates/centrifuge-client-core/proto/client.proto`. Needs `protoc` on `PATH`.
 //!   The output is committed, so users never need `protoc`.
 //! - `tla-traces`: generate the TLA+ traces the core replays (see `tla.rs`).
 //! - `tla-check [config...]`: model-check the replayed schedules exhaustively.
@@ -45,7 +45,7 @@ fn workspace_root() -> PathBuf {
 
 fn proto() -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
-    let core = root.join("crates/centrifuge-core");
+    let core = root.join("crates/centrifuge-client-core");
     let out = std::env::temp_dir().join("centrifuge-xtask-proto");
     std::fs::create_dir_all(&out)?;
     prost_build::Config::new()
@@ -60,6 +60,6 @@ fn proto() -> Result<(), Box<dyn std::error::Error>> {
         core.join("src/proto/generated.rs"),
         format!("{header}{generated}"),
     )?;
-    println!("wrote crates/centrifuge-core/src/proto/generated.rs");
+    println!("wrote crates/centrifuge-client-core/src/proto/generated.rs");
     Ok(())
 }

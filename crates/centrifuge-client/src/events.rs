@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 
-use centrifuge_core::machine::TransportKind;
-use centrifuge_core::types::{ClientInfo, Publication, StreamPosition};
+use centrifuge_client_core::machine::TransportKind;
+use centrifuge_client_core::types::{ClientInfo, Publication, StreamPosition};
 
 use crate::error::{ClientError, SubscriptionError};
 
@@ -279,7 +279,9 @@ fn opt_bytes(b: Bytes) -> Option<Bytes> {
     if b.is_empty() { None } else { Some(b) }
 }
 
-pub(crate) fn subscribed_event(i: centrifuge_core::machine::SubscribedInfo) -> SubscribedEvent {
+pub(crate) fn subscribed_event(
+    i: centrifuge_client_core::machine::SubscribedInfo,
+) -> SubscribedEvent {
     SubscribedEvent {
         was_recovering: i.was_recovering,
         recovered: i.recovered,

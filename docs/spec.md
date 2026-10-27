@@ -99,7 +99,7 @@ Left out of phase 1 on purpose, with the matrix's own rows:
 
 - **Name: `centrifuge-client`**, with `[lib] name = "centrifuge"`, so code says `use centrifuge::Client`. The repository stays `centrifuge-rust`, matching the org's `centrifuge-<lang>` repos.
 - **Two crates in one workspace**, as `quinn` / `quinn-proto` do:
-  - `centrifuge-core`: the sans-IO state machine and codecs, with no IO and no runtime.
+  - `centrifuge-client-core`: the sans-IO state machine and codecs, with no IO and no runtime.
   - `centrifuge-client`: the driver, transports and public API.
 
   Both are published, because crates.io needs every dependency published, and both are released **in lockstep** with one version (release-plz `version_group`). Users depend only on `centrifuge-client`, which re-exports the core's data types. The core's other items carry no stability promise, and the client's semver check covers what it re-exports. The split keeps the core provably free of IO dependencies (CI builds it for wasm32), and lets the model-based tests (§11.1) target it directly.
@@ -109,10 +109,10 @@ Left out of phase 1 on purpose, with the matrix's own rows:
   - types documented under `centrifuge::` (`#[doc(inline)]` re-exports)
   - no runtime cost; the few hot codec helpers get `#[inline]`
 
-  Compiler errors may name `centrifuge_core::...` paths, as `quinn_proto` ones do for quinn users.
+  Compiler errors may name `centrifuge_client_core::...` paths, as `quinn_proto` ones do for quinn users.
 
   **Rules the split imposes on the implementation:**
-  - Inherent methods on re-exported types, e.g. `Publication::json::<T>()`, must be defined in `centrifuge-core`. The client can't add methods to another crate's types. So the core has a `serde` feature, and the client's `serde` feature enables it (`serde = ["centrifuge-core/serde"]`). The same goes for trait impls on core types that the orphan rule would block in the client.
+  - Inherent methods on re-exported types, e.g. `Publication::json::<T>()`, must be defined in `centrifuge-client-core`. The client can't add methods to another crate's types. So the core has a `serde` feature, and the client's `serde` feature enables it (`serde = ["centrifuge-client-core/serde"]`). The same goes for trait impls on core types that the orphan rule would block in the client.
   - Every client feature that touches core types forwards to the matching core feature.
   - Nothing in the public client API names a core item that isn't re-exported.
 - **About the name:** it has no `-rs`/`-rust` suffix, per the Rust API Guidelines ("Every crate is Rust!"). `centrifuge` itself is a third-party `0.0.0` placeholder (`richard-w`, Feb 2025), so we don't use it. Reserve `centrifuge-client` on crates.io before the first release (it was free on 2026-10-26).
@@ -185,7 +185,7 @@ Workspace layout (internal, not a public contract):
 
 ```
 Cargo.toml                    workspace: shared version, MSRV, lints
-crates/centrifuge-core/       sans-IO core (§9.2). No IO, no runtime, no clock; builds for wasm32
+crates/centrifuge-client-core/       sans-IO core (§9.2). No IO, no runtime, no clock; builds for wasm32
   src/proto/                  generated Protobuf types
   src/codec/                  JSON and Protobuf codecs, frame splitting (pure functions)
   src/delta.rs                fossil delta apply
@@ -1203,7 +1203,7 @@ Later features must arrive as **additive** changes: no breaking release and no r
 General rules that keep this true:
 - No public struct with public fields that might grow, unless it's `#[non_exhaustive]`.
 - No public trait users implement, unless it's sealed or deliberately an extension point.
-- No dependency in `centrifuge-core` that does IO or needs a runtime.
+- No dependency in `centrifuge-client-core` that does IO or needs a runtime.
 - No hard `Send`/`Sync` in public bounds: use `MaybeSend`/`MaybeSync`.
 - A new feature that needs a breaking change gets a spec note and an explicit decision first.
 
@@ -1361,7 +1361,7 @@ Everything runs in GitHub Actions. Nothing is released from a laptop.
 - MSRV `cargo check` with the `rust-version` read from `Cargo.toml`.
 - `cargo hack --feature-powerset`, and `cargo minimal-versions` (the lower bounds in `Cargo.toml` must build).
 - Rustdoc on nightly with `--cfg docsrs -D warnings`.
-- `centrifuge-core` builds for `wasm32-unknown-unknown` (§9.11).
+- `centrifuge-client-core` builds for `wasm32-unknown-unknown` (§9.11).
 - Coverage (`cargo-llvm-cov` → Codecov via OIDC).
 - `cargo-deny`: advisories, licenses, bans, sources.
 - `typos`, and `zizmor` for workflow security.
@@ -1474,7 +1474,7 @@ Settled with the maintainers, 2026-10-26:
 | 17 | Reconnect backoff resets after the first ping or command reply on every transport | §6.2, §1.1 |
 | 18 | `refresh` push adjusts only an existing client-side refresh schedule | §6.6 |
 | 19 | No `network_changed()` / `force_reconnect()`: apps call `disconnect(); connect()`, which in phase 2 also resets the fallback | §5.8, §13 |
-| 20 | Built for future work: `centrifuge-core` crate (wasm-checked), `MaybeSend`/`MaybeSync` bounds, the provisions listed in §9.11 | §3.1, §9.11 |
+| 20 | Built for future work: `centrifuge-client-core` crate (wasm-checked), `MaybeSend`/`MaybeSync` bounds, the provisions listed in §9.11 | §3.1, §9.11 |
 
 Settled during implementation, 2026-10-27 (reviewed one by one):
 

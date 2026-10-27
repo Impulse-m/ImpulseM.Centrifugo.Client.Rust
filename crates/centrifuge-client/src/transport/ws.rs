@@ -4,8 +4,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
-use centrifuge_core::codec::{self, Protocol};
-use centrifuge_core::machine::CloseReason;
+use centrifuge_client_core::codec::{self, Protocol};
+use centrifuge_client_core::machine::CloseReason;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;

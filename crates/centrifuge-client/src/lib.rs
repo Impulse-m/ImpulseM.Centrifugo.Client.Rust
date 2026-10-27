@@ -59,10 +59,10 @@ mod subscription;
 mod transport;
 
 pub use bytes::Bytes;
-pub use centrifuge_core::codes;
-pub use centrifuge_core::filter::{Filter, FilterNode};
-pub use centrifuge_core::machine::{State, SubState};
-pub use centrifuge_core::types::{
+pub use centrifuge_client_core::codes;
+pub use centrifuge_client_core::filter::{Filter, FilterNode};
+pub use centrifuge_client_core::machine::{State, SubState};
+pub use centrifuge_client_core::types::{
     ClientInfo, HistoryOptions, HistoryResult, PresenceResult, PresenceStatsResult, Publication,
     RpcResult, StreamPosition,
 };
@@ -99,6 +99,6 @@ mod tests {
 
     #[test]
     fn released_in_lockstep_with_core() {
-        assert_eq!(VERSION, centrifuge_core::VERSION);
+        assert_eq!(VERSION, centrifuge_client_core::VERSION);
     }
 }

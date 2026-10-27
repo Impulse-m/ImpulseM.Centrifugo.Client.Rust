@@ -1,7 +1,7 @@
 [package]
-name = "centrifuge-core"
+name = "centrifuge-client-core"
 description = "Sans-IO protocol state machine behind centrifuge-client. Not a stable API: use centrifuge-client."
-documentation = "https://docs.rs/centrifuge-core"
+documentation = "https://docs.rs/centrifuge-client-core"
 readme = "README.md"
 keywords = ["centrifugo", "centrifuge", "sans-io"]
 categories = ["network-programming"]

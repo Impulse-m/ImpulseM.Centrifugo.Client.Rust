@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use centrifuge_core::codec::Protocol;
-use centrifuge_core::machine::{Op, State, SubKey, SubState, TransportId, TransportKind};
+use centrifuge_client_core::codec::Protocol;
+use centrifuge_client_core::machine::{Op, State, SubKey, SubState, TransportId, TransportKind};
 use tokio::sync::{mpsc, watch};
 
 use crate::calls::CallTable;
@@ -40,7 +40,7 @@ pub(crate) struct Snapshot {
     /// `connected` and its handler has returned: `ready()` may resolve.
     pub(crate) ready: bool,
     pub(crate) session: Option<SessionHandle>,
-    pub(crate) core_stats: centrifuge_core::machine::CoreStats,
+    pub(crate) core_stats: centrifuge_client_core::machine::CoreStats,
 }
 
 impl Default for Snapshot {
@@ -51,7 +51,7 @@ impl Default for Snapshot {
             applied_seq: 0,
             ready: false,
             session: None,
-            core_stats: centrifuge_core::machine::CoreStats::default(),
+            core_stats: centrifuge_client_core::machine::CoreStats::default(),
         }
     }
 }

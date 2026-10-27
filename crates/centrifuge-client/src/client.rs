@@ -7,10 +7,10 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use bytes::Bytes;
-use centrifuge_core::codec::{self, Protocol};
-use centrifuge_core::machine::{Core, CoreConfig, Op, State, TransportKind};
-use centrifuge_core::proto;
-use centrifuge_core::types::{
+use centrifuge_client_core::codec::{self, Protocol};
+use centrifuge_client_core::machine::{Core, CoreConfig, Op, State, TransportKind};
+use centrifuge_client_core::proto;
+use centrifuge_client_core::types::{
     HistoryOptions, HistoryResult, PresenceResult, PresenceStatsResult, RpcResult,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -447,7 +447,7 @@ impl Client {
         }
         inner.removed.store(true, Ordering::SeqCst);
         shared.send_sub_op(inner, Op::RemoveSubscription(inner.key), |_| {
-            centrifuge_core::machine::SubState::Unsubscribed
+            centrifuge_client_core::machine::SubState::Unsubscribed
         });
         Ok(())
     }

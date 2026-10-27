@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use centrifuge_core::machine::{State, TransportKind};
+use centrifuge_client_core::machine::{State, TransportKind};
 
 /// Counters since the client was built, for status displays, logs and
 /// support tickets. Reading them is cheap: no round trip.

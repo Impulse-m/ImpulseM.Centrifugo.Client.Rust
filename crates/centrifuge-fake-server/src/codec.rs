@@ -1,7 +1,7 @@
 //! The server side of both protocols: commands in, replies out.
 
 use bytes::{Buf as _, Bytes};
-use centrifuge_core::proto;
+use centrifuge_client_core::proto;
 use prost::Message as _;
 use serde_json::{Map, Value, json};
 

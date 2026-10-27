@@ -1,4 +1,4 @@
-# centrifuge-core
+# centrifuge-client-core
 
 The sans-IO protocol state machine behind [`centrifuge-client`](https://crates.io/crates/centrifuge-client), the Rust real-time SDK for [Centrifugo](https://centrifugal.dev).
 
