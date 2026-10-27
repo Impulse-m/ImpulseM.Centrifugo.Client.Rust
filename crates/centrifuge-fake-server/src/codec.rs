@@ -134,6 +134,7 @@ fn sub_req(v: &Value, channel: String) -> proto::SubscribeRequest {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one block per command field; clearer as a list
 fn command_from_json(v: &Value) -> proto::Command {
     let mut c = proto::Command {
         id: u32_of(v, "id"),
@@ -220,6 +221,7 @@ fn command_from_json(v: &Value) -> proto::Command {
         c.rpc = Some(proto::RpcRequest {
             data: raw(x, "data"),
             method: s(x, "method"),
+            ..Default::default()
         });
     }
     if let Some(x) = v.get("refresh") {

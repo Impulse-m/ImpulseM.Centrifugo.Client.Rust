@@ -246,6 +246,7 @@ fn stream_frames(protocol: Protocol) -> (Vec<u8>, Vec<proto::Reply>) {
             id: i,
             rpc: Some(proto::RpcResult {
                 data: Bytes::from(format!("{{\"n\":{i}}}")),
+                ..Default::default()
             }),
             ..Default::default()
         })

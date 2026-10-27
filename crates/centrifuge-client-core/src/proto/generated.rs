@@ -23,7 +23,7 @@
 ///
 /// Note that many protocol violations result in a Disconnect instead of an
 /// Error reply.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Error {
     /// Error code.
     #[prost(uint32, tag = "1")]
@@ -36,6 +36,16 @@ pub struct Error {
     /// if retried later (preferably with a backoff).
     #[prost(bool, tag = "3")]
     pub temporary: bool,
+    /// Application error code passed through from the backend; 0 = none.
+    #[prost(int32, tag = "1000")]
+    pub app_code: i32,
+    /// Application error type passed through from the backend.
+    #[prost(string, tag = "1001")]
+    pub app_type: ::prost::alloc::string::String,
+    /// Allow-listed backend metadata for the client.
+    #[prost(map = "string, string", tag = "1002")]
+    pub metadata:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 /// EmulationRequest is the body of an HTTP request a client sends to the
 /// emulation endpoint when it uses bidirectional emulation over a transport
@@ -144,6 +154,9 @@ pub struct Reply {
     pub refresh: ::core::option::Option<RefreshResult>,
     #[prost(message, optional, tag = "15")]
     pub sub_refresh: ::core::option::Option<SubRefreshResult>,
+    /// Server Unix time in milliseconds, set on command replies only.
+    #[prost(int64, tag = "1000")]
+    pub time: i64,
 }
 /// Push is an asynchronous message from a server to a client. It is sent
 /// inside Reply.push on bidirectional transports, and without additional
@@ -501,6 +514,9 @@ pub struct ConnectRequest {
     /// disagree, which is bounded and small.
     #[prost(string, tag = "8")]
     pub dict: ::prost::alloc::string::String,
+    /// Client-persisted install id.
+    #[prost(string, tag = "1000")]
+    pub instance: ::prost::alloc::string::String,
 }
 /// ConnectResult is the result of a successful connect.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -559,6 +575,12 @@ pub struct ConnectResult {
     /// ConnectRequest.dict, since the client already holds the bytes.
     #[prost(message, optional, tag = "13")]
     pub dict: ::core::option::Option<Dictionary>,
+    /// User the connection is authenticated as.
+    #[prost(string, tag = "1000")]
+    pub user: ::prost::alloc::string::String,
+    /// Authentication class of the connection.
+    #[prost(string, tag = "1001")]
+    pub auth_class: ::prost::alloc::string::String,
 }
 /// RefreshRequest refreshes an expiring connection with a new token.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -582,6 +604,12 @@ pub struct RefreshResult {
     /// Seconds until the connection expires.
     #[prost(uint32, tag = "4")]
     pub ttl: u32,
+    /// User the connection is authenticated as.
+    #[prost(string, tag = "1000")]
+    pub user: ::prost::alloc::string::String,
+    /// Authentication class of the connection.
+    #[prost(string, tag = "1001")]
+    pub auth_class: ::prost::alloc::string::String,
 }
 /// SubscribeRequest subscribes the client to a channel.
 ///
@@ -915,7 +943,7 @@ pub struct PingRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PingResult {}
 /// RPCRequest is a remote procedure call handled by the application.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RpcRequest {
     /// Call payload.
     #[prost(bytes = "bytes", tag = "1")]
@@ -923,6 +951,28 @@ pub struct RpcRequest {
     /// Optional method name to route the call.
     #[prost(string, tag = "2")]
     pub method: ::prost::alloc::string::String,
+    /// Per-call headers, forwarded by allow-list.
+    #[prost(map = "string, string", tag = "1000")]
+    pub headers:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// Client request id (fits 53 bits); 0 = no dedup or ordering.
+    #[prost(uint64, tag = "1001")]
+    pub msg_id: u64,
+    /// msg_ids whose replies were received.
+    #[prost(uint64, repeated, tag = "1002")]
+    pub ack: ::prost::alloc::vec::Vec<u64>,
+    /// Resend after transport loss.
+    #[prost(bool, tag = "1003")]
+    pub retransmit: bool,
+    /// Run only after these msg_ids finished.
+    #[prost(uint64, repeated, tag = "1004")]
+    pub after: ::prost::alloc::vec::Vec<u64>,
+    /// Updates caused by this call are not pushed to the caller.
+    #[prost(bool, tag = "1005")]
+    pub without_updates: bool,
+    /// Cancel this msg_id; method and data are empty.
+    #[prost(uint64, tag = "1006")]
+    pub cancel: u64,
 }
 /// RPCResult is the result of an RPC call.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -930,6 +980,9 @@ pub struct RpcResult {
     /// Result payload.
     #[prost(bytes = "bytes", tag = "1")]
     pub data: ::prost::bytes::Bytes,
+    /// Answered from the deduplication record.
+    #[prost(bool, tag = "1000")]
+    pub cached: bool,
 }
 /// SendRequest is an asynchronous message from the client to the server
 /// handled by the application. No Reply is sent in response, so the command

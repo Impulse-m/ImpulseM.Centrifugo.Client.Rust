@@ -351,6 +351,7 @@ impl Replay {
             code,
             message: "model".into(),
             temporary,
+            ..Default::default()
         }
     }
 

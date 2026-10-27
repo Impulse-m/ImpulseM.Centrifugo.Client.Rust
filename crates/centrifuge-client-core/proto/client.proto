@@ -18,6 +18,8 @@
 // matter for JSON). Never renumber, rename or change type of an existing field.
 // Removed fields must be added to reserved.
 //
+// Fork fields use numbers 1000-1999.
+//
 // oneof is intentionally not used anywhere in this file for JSON
 // interoperability: a message which semantically carries one of several
 // payloads has them as separate optional fields, exactly one of which is set.
@@ -59,6 +61,13 @@ message Error {
   // When set the error condition is temporary and the same command may succeed
   // if retried later (preferably with a backoff).
   bool temporary = 3;
+
+  // Application error code passed through from the backend; 0 = none.
+  int32 app_code = 1000;
+  // Application error type passed through from the backend.
+  string app_type = 1001;
+  // Allow-listed backend metadata for the client.
+  map<string, string> metadata = 1002;
 }
 
 // EmulationRequest is the body of an HTTP request a client sends to the
@@ -149,6 +158,9 @@ message Reply {
   RPCResult rpc = 13;
   RefreshResult refresh = 14;
   SubRefreshResult sub_refresh = 15;
+
+  // Server Unix time in milliseconds, set on command replies only.
+  int64 time = 1000;
 }
 
 // Push is an asynchronous message from a server to a client. It is sent
@@ -446,6 +458,9 @@ message ConnectRequest {
   // cost is one extra transfer per hop during a rolling deploy where nodes
   // disagree, which is bounded and small.
   string dict = 8;
+
+  // Client-persisted install id.
+  string instance = 1000;
 }
 
 // ConnectResult is the result of a successful connect.
@@ -491,6 +506,11 @@ message ConnectResult {
   // compressed. It carries only an id when the client advertised that same id in
   // ConnectRequest.dict, since the client already holds the bytes.
   Dictionary dict = 13;
+
+  // User the connection is authenticated as.
+  string user = 1000;
+  // Authentication class of the connection.
+  string auth_class = 1001;
 }
 
 // RefreshRequest refreshes an expiring connection with a new token.
@@ -509,6 +529,11 @@ message RefreshResult {
   bool expires = 3;
   // Seconds until the connection expires.
   uint32 ttl = 4;
+
+  // User the connection is authenticated as.
+  string user = 1000;
+  // Authentication class of the connection.
+  string auth_class = 1001;
 }
 
 // SubscribeRequest subscribes the client to a channel.
@@ -786,12 +811,30 @@ message RPCRequest{
   bytes data = 1;
   // Optional method name to route the call.
   string method = 2;
+
+  // Per-call headers, forwarded by allow-list.
+  map<string, string> headers = 1000;
+  // Client request id (fits 53 bits); 0 = no dedup or ordering.
+  uint64 msg_id = 1001;
+  // msg_ids whose replies were received.
+  repeated uint64 ack = 1002;
+  // Resend after transport loss.
+  bool retransmit = 1003;
+  // Run only after these msg_ids finished.
+  repeated uint64 after = 1004;
+  // Updates caused by this call are not pushed to the caller.
+  bool without_updates = 1005;
+  // Cancel this msg_id; method and data are empty.
+  uint64 cancel = 1006;
 }
 
 // RPCResult is the result of an RPC call.
 message RPCResult {
   // Result payload.
   bytes data = 1 ;
+
+  // Answered from the deduplication record.
+  bool cached = 1000;
 }
 
 // SendRequest is an asynchronous message from the client to the server

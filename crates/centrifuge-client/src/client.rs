@@ -296,6 +296,7 @@ impl Client {
             rpc: Some(proto::RpcRequest {
                 data,
                 method: method.to_owned(),
+                ..Default::default()
             }),
             ..Default::default()
         };

@@ -477,6 +477,7 @@ fn error_reply(id: u32, code: u32, message: &str, temporary: bool) -> proto::Rep
             code,
             message: message.to_owned(),
             temporary,
+            ..Default::default()
         }),
         ..Default::default()
     }
@@ -842,6 +843,7 @@ fn default_handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Out> 
         return reply(proto::Reply {
             rpc: Some(proto::RpcResult {
                 data: req.data.clone(),
+                ..Default::default()
             }),
             ..Default::default()
         });

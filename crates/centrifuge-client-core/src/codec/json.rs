@@ -329,6 +329,7 @@ impl JReply<'_> {
                 code: e.code,
                 message: e.message,
                 temporary: e.temporary,
+                ..Default::default()
             }),
             push: self.push.map(|p| p.into_proto(f)),
             connect: self.connect.map(|c| c.into_proto(f)),
@@ -358,18 +359,21 @@ impl JReply<'_> {
             ping: self.ping.map(|_| proto::PingResult {}),
             rpc: self.rpc.map(|r| proto::RpcResult {
                 data: raw_bytes(f, r.data),
+                ..Default::default()
             }),
             refresh: self.refresh.map(|r| proto::RefreshResult {
                 client: r.client,
                 version: r.version,
                 expires: r.expires,
                 ttl: r.ttl,
+                ..Default::default()
             }),
             sub_refresh: self.sub_refresh.map(|r| proto::SubRefreshResult {
                 expires: r.expires,
                 ttl: r.ttl,
                 items: r.items.into_iter().map(|p| p.into_proto(f)).collect(),
             }),
+            ..Default::default()
         }
     }
 }
@@ -480,6 +484,7 @@ impl JConnectResult<'_> {
             time: self.time,
             flag: self.flag,
             dict: None,
+            ..Default::default()
         }
     }
 }

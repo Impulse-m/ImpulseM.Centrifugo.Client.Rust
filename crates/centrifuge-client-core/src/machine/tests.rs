@@ -669,6 +669,7 @@ fn connect_error_rules() {
                 code: 100,
                 message: "internal".into(),
                 temporary: true,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -688,6 +689,7 @@ fn connect_error_rules() {
                 code: 103,
                 message: "permission denied".into(),
                 temporary: false,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -716,6 +718,7 @@ fn static_token_expired_without_getter_stops_after_one_retry() {
                 code: 109,
                 message: "token expired".into(),
                 temporary: false,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -1222,6 +1225,7 @@ fn resubscribe_delay_survives_a_reconnect() {
                 code: 100,
                 message: "internal".into(),
                 temporary: true,
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -1264,6 +1268,7 @@ fn subscribe_error_codes() {
         code,
         message: "x".into(),
         temporary,
+        ..Default::default()
     };
     assert_eq!(
         run(e(103, false), false),
@@ -1310,6 +1315,7 @@ fn get_state_runs_without_position_and_again_after_112() {
                 code: 112,
                 message: "unrecoverable".into(),
                 temporary: false,
+                ..Default::default()
             }),
             ..Default::default()
         },
