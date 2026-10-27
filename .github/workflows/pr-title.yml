@@ -1,5 +1,5 @@
-# PRs are squash-merged, so the PR title becomes the commit message that
-# release-plz reads to pick the next version and write the changelog.
+# PRs are squash-merged, so the PR title becomes the commit message, and the
+# release notes GitHub generates list PRs by title.
 name: PR title
 
 on:

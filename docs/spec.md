@@ -102,7 +102,7 @@ Left out of phase 1 on purpose, with the matrix's own rows:
   - `centrifuge-client-core`: the sans-IO state machine and codecs, with no IO and no runtime.
   - `centrifuge-client`: the driver, transports and public API.
 
-  Both are published, because crates.io needs every dependency published, and both are released **in lockstep** with one version (release-plz `version_group`). Users depend only on `centrifuge-client`, which re-exports the core's data types. The core's other items carry no stability promise, and the client's semver check covers what it re-exports. The split keeps the core provably free of IO dependencies (CI builds it for wasm32), and lets the model-based tests (§11.1) target it directly.
+  Both are published, because crates.io needs every dependency published, and both are released **in lockstep** with one version (one `[workspace.package]` version, and the client pins the core exactly with `=`). Users depend only on `centrifuge-client`, which re-exports the core's data types. The core's other items carry no stability promise, and the client's semver check covers what it re-exports. The split keeps the core provably free of IO dependencies (CI builds it for wasm32), and lets the model-based tests (§11.1) target it directly.
 
   What users see is unchanged:
   - one dependency to add
@@ -1372,19 +1372,19 @@ Everything runs in GitHub Actions. Nothing is released from a laptop.
 
 Integration jobs against a real Centrifugo (§11.4) and the seeded chaos runs (§11.3) join this file when the code they test exists.
 
-**`release-plz.yml`**: every push to `main` updates a release PR.
-- The version is bumped from conventional commits and checked with `cargo-semver-checks`. `CHANGELOG.md` is updated.
-- Merging the release PR publishes to crates.io via **trusted publishing** (OIDC, no stored token) from the protected `release` environment, then tags `vX.Y.Z` and creates the GitHub release.
-- The release PR is opened with a GitHub App token, so CI runs on it.
+**`release.yml`**: a pushed `vX.Y.Z` tag publishes.
+- The version is bumped beforehand in a normal commit on `main`. The workflow checks that the tag names it, that the commit is on `main` and passed CI, and that the bump matches the API change (`cargo-semver-checks`).
+- It publishes the core, then the client, to crates.io via **trusted publishing** (OIDC, no stored token) from the protected `release` environment, and creates the GitHub release with generated notes, unless the maintainer created it.
+- Release notes live on GitHub releases, as in the other Centrifugal SDKs.
 
-**`pr-title.yml`**: PR titles must be conventional commits, since squash merges make them the commit messages release-plz reads.
+**`pr-title.yml`**: PR titles must be conventional commits; squash merges make them the commit messages.
 
 **Supply chain:**
 - Every action is pinned to a full commit SHA, and Dependabot bumps actions and the lock file weekly, with a 7-day cooldown.
 - `Cargo.lock` is committed.
 - Workflows default to read-only permissions, credentials aren't persisted, and the release job uses no build cache.
 
-The one-time setup (first manual publish, crates.io trusted publisher, `release` environment, GitHub App, branch protection) is in `CONTRIBUTING.md`.
+The one-time setup (first manual publish, crates.io trusted publisher, `release` environment, tag and branch protection) is in `CONTRIBUTING.md`.
 
 ## 12. Conformance checklist (bug catalogue)
 

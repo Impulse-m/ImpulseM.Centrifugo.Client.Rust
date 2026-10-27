@@ -1,14 +1,17 @@
 # Publishes a release when a maintainer pushes a `vX.Y.Z` tag (CONTRIBUTING.md,
-# "Releases"). The version bump and the changelog come from the release PR
-# (release-plz.yml); this workflow only publishes what that PR merged.
+# "Releases"). The version in Cargo.toml is bumped
+# beforehand in a normal commit on main.
 #
 # 1. Checks the tag: it names the workspace version, points at a commit on
 #    main, and that commit passed CI.
-# 2. Publishes the core, then the client, to crates.io through trusted
+# 2. Checks the version bump against the API change (cargo-semver-checks,
+#    against the latest version on crates.io).
+# 3. Publishes the core, then the client, to crates.io through trusted
 #    publishing (OIDC, no token secret). A version already on crates.io is
 #    skipped, so a rerun after a partial publish, or a tag pushed after a
 #    manual first publish, completes the release.
-# 3. Creates the GitHub release from the version's CHANGELOG.md section.
+# 4. Creates the GitHub release with generated notes (the PRs merged since the
+#    previous tag), unless the maintainer already created it.
 name: Release
 
 on:
@@ -72,18 +75,42 @@ jobs:
         id: todo
         run: |
           set -eu
+          status() {
+            curl -s -o /dev/null -w '%{http_code}' \
+              -A "centrifuge-rust-release (https://github.com/centrifugal/centrifuge-rust)" \
+              "https://crates.io/api/v1/crates/$1"
+          }
           todo=""
           for crate in centrifuge-client-core centrifuge-client; do
-            status=$(curl -s -o /dev/null -w '%{http_code}' \
-              -A "centrifuge-rust-release (https://github.com/centrifugal/centrifuge-rust)" \
-              "https://crates.io/api/v1/crates/$crate/$VERSION")
-            case "$status" in
+            case "$(status "$crate/$VERSION")" in
               200) echo "$crate $VERSION is already on crates.io" ;;
               404) todo="$todo $crate" ;;
-              *) echo "::error::crates.io answered $status for $crate $VERSION"; exit 1 ;;
+              *) echo "::error::crates.io lookup of $crate $VERSION failed"; exit 1 ;;
             esac
           done
           echo "crates=$todo" >> "$GITHUB_OUTPUT"
+          # Check the bump only for a new client version with a previous
+          # release to compare against (none before 0.1.0).
+          semver=false
+          case " $todo " in
+            *" centrifuge-client "*)
+              case "$(status centrifuge-client)" in
+                200) semver=true ;;
+                404) ;;
+                *) echo "::error::crates.io lookup of centrifuge-client failed"; exit 1 ;;
+              esac ;;
+          esac
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+
+      # The core has no stability promise of its own; the client's check covers
+      # the core types it re-exports.
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        if: steps.todo.outputs.semver == 'true'
+        with:
+          tool: cargo-semver-checks
+      - name: Check the version bump
+        if: steps.todo.outputs.semver == 'true'
+        run: cargo semver-checks --package centrifuge-client
 
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         if: steps.todo.outputs.crates != ''
@@ -109,15 +136,6 @@ jobs:
           set -eu
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME exists"
-            exit 0
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
           fi
-          awk -v v="$VERSION" '
-            index($0, "## [" v "]") == 1 { on = 1; next }
-            /^## \[/ { on = 0 }
-            on
-          ' CHANGELOG.md > notes.md
-          if ! grep -q '[^[:space:]]' notes.md; then
-            echo "::error::no CHANGELOG.md section for $VERSION"
-            exit 1
-          fi
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
