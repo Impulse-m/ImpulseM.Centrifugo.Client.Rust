@@ -270,7 +270,6 @@ pub use bytes::Bytes;
 
 | Feature | Default | Effect |
 |---|---|---|
-| `protobuf` | yes | Protobuf codec (default protocol) |
 | `json` | yes | JSON codec |
 | `http-stream` | yes | HTTP-streaming transport and fallback |
 | `system-proxy` | yes | OS proxy settings |

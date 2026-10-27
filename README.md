@@ -176,8 +176,7 @@ use tauri::{Emitter as _, Manager as _};
 
 | Feature | Default | What it does |
 |---|---|---|
-| `protobuf` | yes | Protobuf protocol (the default protocol) |
-| `json` | yes | JSON protocol |
+| `json` | yes | JSON protocol (Protobuf, the default protocol, is always built in) |
 | `http-stream` | yes | HTTP-streaming transport and fallback |
 | `system-proxy` | yes | OS proxy settings (macOS, Windows) |
 | `aws-lc-rs` | yes | rustls crypto provider |

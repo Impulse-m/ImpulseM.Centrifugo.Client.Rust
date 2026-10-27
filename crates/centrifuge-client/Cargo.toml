@@ -54,9 +54,8 @@ name = "chat"
 required-features = ["serde"]
 
 [features]
-default = ["protobuf", "json", "http-stream", "system-proxy", "aws-lc-rs", "delta", "serde"]
-# Protocol codecs. Protobuf is the default protocol.
-protobuf = []
+default = ["json", "http-stream", "system-proxy", "aws-lc-rs", "delta", "serde"]
+# The JSON protocol. Protobuf, the default protocol, is always built in.
 json = ["centrifuge-client-core/json"]
 # HTTP-streaming transport (with bidirectional emulation) and fallback.
 http-stream = ["dep:hyper", "dep:http-body-util"]
