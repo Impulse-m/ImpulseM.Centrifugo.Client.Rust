@@ -287,6 +287,30 @@ pub struct ServerError {
     pub app_type: String,
     /// Metadata the server attached, such as the retry signal of an rpc call.
     pub metadata: HashMap<String, String>,
+    /// Whether the client raised this error itself, with a code of its own,
+    /// rather than the server sending it.
+    local: bool,
+}
+
+impl ServerError {
+    /// Whether the client raised this error itself (unsupported headers, limit,
+    /// cancel, redirect), so its `code` is not a server code.
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.local
+    }
+
+    /// An error the client raises itself, with its own `code`.
+    #[doc(hidden)] // used by the client crate; not for applications
+    #[must_use]
+    pub fn client_local(code: u32, message: String) -> Self {
+        Self {
+            code,
+            message,
+            local: true,
+            ..Self::default()
+        }
+    }
 }
 
 #[doc(hidden)] // the wire model is an implementation detail
@@ -299,6 +323,7 @@ impl From<proto::Error> for ServerError {
             app_code: e.app_code,
             app_type: e.app_type,
             metadata: e.metadata,
+            local: false,
         }
     }
 }

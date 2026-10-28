@@ -5,8 +5,8 @@
 use std::ffi::{c_char, c_void};
 
 use centrifuge::{
-    Client, ClientErrorKind, ConnectedEvent, DisconnectedEvent, ErrorEvent, ServerPublicationEvent,
-    SubscribedEvent, SubscriptionErrorKind,
+    ArcError, Client, ClientErrorKind, ConnectedEvent, DisconnectedEvent, ErrorEvent, ServerError,
+    ServerPublicationEvent, SubscribedEvent, SubscriptionErrorKind,
 };
 
 use crate::{ImpulseCentrifugoClient, ImpulseCentrifugoStatus, UserData, guarded, status};
@@ -85,6 +85,9 @@ pub struct ImpulseCentrifugoEvent {
     /// The offset of a publication, or the stream offset of a subscribed event
     /// with the stream position flag. Zero otherwise.
     pub offset: u64,
+    /// The code the server sent with a connect or subscribe error event, zero
+    /// otherwise. The error's own kind is in `code`.
+    pub server_code: u32,
 }
 
 /// Called for every event. `user` is the pointer given with the callback.
@@ -130,6 +133,8 @@ pub(crate) struct EventFields<'text> {
     pub(crate) data: &'text [u8],
     /// The offset of the event, zero when it has none.
     pub(crate) offset: u64,
+    /// The code the server sent with the event, zero when there is none.
+    pub(crate) server_code: u32,
 }
 
 /// Builds an event from its borrowed fields.
@@ -144,6 +149,19 @@ pub(crate) fn event_of(fields: &EventFields<'_>) -> ImpulseCentrifugoEvent {
         data: fields.data.as_ptr(),
         data_len: fields.data.len(),
         offset: fields.offset,
+        server_code: fields.server_code,
+    }
+}
+
+/// The code the server sent behind an error's source, or zero when the source
+/// is absent, is not a server error, or is the client's own error.
+pub(crate) fn server_code_of_source(source: Option<&ArcError>) -> u32 {
+    let Some(error) = source else {
+        return 0;
+    };
+    match error.downcast_ref::<ServerError>() {
+        Some(server) if !server.is_local() => server.code,
+        _ => 0,
     }
 }
 
@@ -229,6 +247,7 @@ pub unsafe extern "C" fn impulse_centrifugo_client_set_event_callback(
                     channel: "",
                     data: &[],
                     offset: 0,
+                    server_code: 0,
                 }));
             });
         handle
@@ -241,6 +260,7 @@ pub unsafe extern "C" fn impulse_centrifugo_client_set_event_callback(
                     channel: "",
                     data: &[],
                     offset: 0,
+                    server_code: 0,
                 }));
             });
         handle
@@ -253,6 +273,7 @@ pub unsafe extern "C" fn impulse_centrifugo_client_set_event_callback(
                     channel: "",
                     data: &[],
                     offset: 0,
+                    server_code: server_code_of_source(event.error.source.as_ref()),
                 }));
             });
         handle
@@ -265,6 +286,7 @@ pub unsafe extern "C" fn impulse_centrifugo_client_set_event_callback(
                     channel: &event.channel,
                     data: &event.publication.data,
                     offset: event.publication.offset,
+                    server_code: 0,
                 }));
             });
         status(ImpulseCentrifugoStatus::Ok)

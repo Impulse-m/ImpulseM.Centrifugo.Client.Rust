@@ -1,5 +1,6 @@
 //! Client-side subscription behaviour (docs/spec.md §7).
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -11,7 +12,7 @@ use super::{
 };
 use crate::codec::Protocol;
 use crate::codes::{connecting, disconnected, subscribing, unsubscribed};
-use crate::types::{ClientInfo, Publication, StreamPosition};
+use crate::types::{ClientInfo, Publication, ServerError, StreamPosition};
 use crate::{codes, delta, proto};
 
 /// The sentinel epoch of an invalidated position: the server never matches it
@@ -684,7 +685,9 @@ impl Core {
         if err.code == codes::TOKEN_EXPIRED {
             if has_get_token {
                 s.token.clear();
-                Self::sub_error(key, SubscriptionErrorKind::Subscribe, message, None, out);
+                let source: Option<super::ArcError> =
+                    Some(Arc::new(ServerError::from(err.clone())));
+                Self::sub_error(key, SubscriptionErrorKind::Subscribe, message, source, out);
                 self.schedule_resubscribe(key, now);
             } else {
                 Self::sub_error(
@@ -699,7 +702,8 @@ impl Core {
             return;
         }
         if err.temporary || err.code < 100 {
-            Self::sub_error(key, SubscriptionErrorKind::Subscribe, message, None, out);
+            let source: Option<super::ArcError> = Some(Arc::new(ServerError::from(err.clone())));
+            Self::sub_error(key, SubscriptionErrorKind::Subscribe, message, source, out);
             self.schedule_resubscribe(key, now);
             return;
         }

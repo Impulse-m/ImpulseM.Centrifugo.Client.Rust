@@ -12,7 +12,7 @@
  * Version of this C ABI. Bumped when a signature, a struct layout or a status
  * value changes. The C++ side compares it with the header macro at startup.
  */
-#define IMPULSE_CENTRIFUGO_ABI_VERSION 1
+#define IMPULSE_CENTRIFUGO_ABI_VERSION 2
 
 /**
  * Kinds of [`ImpulseCentrifugoEvent`].
@@ -102,8 +102,9 @@ typedef int32_t impulse_centrifugo_token_kind;
 
 /**
  * Status of every exported function. Zero is success, positive values are the
- * client error codes shared with the Java and Swift SDKs, negative values are
- * ABI errors.
+ * client error codes shared with the Java and Swift SDKs and `ServerError`,
+ * negative values are ABI errors. The code of a server error is carried in its
+ * own field of the reply or event, never as the status.
  */
 enum impulse_centrifugo_status
 #if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
@@ -175,6 +176,12 @@ enum impulse_centrifugo_status
    * A redirect of a pool call did not complete.
    */
   IMPULSE_CENTRIFUGO_STATUS_REDIRECT_FAILED = 18,
+  /**
+   * The server answered with an error. Its code is in the `server_code` field
+   * of the reply or event, and its message in the message field. Every server
+   * error has this status, whatever its code, including zero.
+   */
+  IMPULSE_CENTRIFUGO_STATUS_SERVER_ERROR = 19,
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -350,6 +357,11 @@ typedef struct impulse_centrifugo_event_t {
    * with the stream position flag. Zero otherwise.
    */
   uint64_t offset;
+  /**
+   * The code the server sent with a connect or subscribe error event, zero
+   * otherwise. The error's own kind is in `code`.
+   */
+  uint32_t server_code;
 } impulse_centrifugo_event_t;
 
 /**
@@ -358,8 +370,10 @@ typedef struct impulse_centrifugo_event_t {
  */
 typedef struct impulse_centrifugo_result_t {
   /**
-   * Zero on success. Otherwise the failure: a server error code (positive,
-   * 100 and up), or one of the client codes of `ImpulseCentrifugoStatus`.
+   * Zero on success. Otherwise the failure: `ServerError` when the server
+   * answered with an error (its code is in `server_code`), or one of the
+   * client codes of `ImpulseCentrifugoStatus`. A server code is never the
+   * status.
    */
   int32_t status;
   /**
@@ -375,7 +389,8 @@ typedef struct impulse_centrifugo_result_t {
    */
   uintptr_t app_type_len;
   /**
-   * A description of the failure, or null on success.
+   * A description of the failure, or null on success. For `ServerError` it is
+   * the server's message.
    */
   const char *message;
   /**
@@ -390,6 +405,10 @@ typedef struct impulse_centrifugo_result_t {
    * Length of `data` in bytes.
    */
   uintptr_t data_len;
+  /**
+   * The code the server sent, when `status` is `ServerError`; zero otherwise.
+   */
+  uint32_t server_code;
 } impulse_centrifugo_result_t;
 
 /**

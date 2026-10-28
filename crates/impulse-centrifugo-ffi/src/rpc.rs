@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use centrifuge::{
     Bytes, Client, Error, RpcCall, RpcOptions, RpcPool, RpcPoolCallOptions, RpcPoolOptions,
+    ServerError,
 };
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
@@ -27,6 +28,22 @@ use crate::{
 
 /// Message of a call that was cancelled.
 const MESSAGE_CANCELLED: &str = "cancelled";
+
+/// Code of a client-local error when the lent token is spent. The client sets
+/// it; it is not a server code.
+const LOCAL_CODE_TOKEN_REFUSED: u32 = 3;
+
+/// Code of a client-local error for a call the connection cannot carry.
+const LOCAL_CODE_UNSUPPORTED: u32 = 15;
+
+/// Code of a client-local error for a call that hit a limit.
+const LOCAL_CODE_LIMIT: u32 = 16;
+
+/// Code of a client-local error for a cancelled call.
+const LOCAL_CODE_CANCELLED: u32 = 17;
+
+/// Code of a client-local error for a redirect of a pool call that did not complete.
+const LOCAL_CODE_REDIRECT_FAILED: u32 = 18;
 
 /// Endpoint key, in a pool config, with the URL of one of its endpoints.
 #[repr(C)]
@@ -43,8 +60,10 @@ pub struct ImpulseCentrifugoEndpoint {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ImpulseCentrifugoResult {
-    /// Zero on success. Otherwise the failure: a server error code (positive,
-    /// 100 and up), or one of the client codes of `ImpulseCentrifugoStatus`.
+    /// Zero on success. Otherwise the failure: `ServerError` when the server
+    /// answered with an error (its code is in `server_code`), or one of the
+    /// client codes of `ImpulseCentrifugoStatus`. A server code is never the
+    /// status.
     pub status: i32,
     /// The application error code the server attached, zero when none.
     pub app_code: i32,
@@ -52,7 +71,8 @@ pub struct ImpulseCentrifugoResult {
     pub app_type: *const c_char,
     /// Length of `app_type` in bytes.
     pub app_type_len: usize,
-    /// A description of the failure, or null on success.
+    /// A description of the failure, or null on success. For `ServerError` it is
+    /// the server's message.
     pub message: *const c_char,
     /// Length of `message` in bytes.
     pub message_len: usize,
@@ -60,6 +80,8 @@ pub struct ImpulseCentrifugoResult {
     pub data: *const u8,
     /// Length of `data` in bytes.
     pub data_len: usize,
+    /// The code the server sent, when `status` is `ServerError`; zero otherwise.
+    pub server_code: u32,
 }
 
 /// Called once with the outcome of a call. `user` is the pointer given with the
@@ -236,6 +258,7 @@ impl Completion {
                     message_len: 0,
                     data: data.as_ptr(),
                     data_len: data.len(),
+                    server_code: 0,
                 });
             }
             Err(error) => {
@@ -256,6 +279,7 @@ impl Completion {
                     message_len: message.len(),
                     data: ptr::null(),
                     data_len: 0,
+                    server_code: server_code_of(&error),
                 });
             }
         }
@@ -272,16 +296,18 @@ impl Completion {
             message_len: MESSAGE_CANCELLED.len(),
             data: ptr::null(),
             data_len: 0,
+            server_code: 0,
         });
     }
 }
 
-/// The status of a failed call: the server's code for a server error, the client
-/// code of the failure otherwise. Subscription and deadlock errors cannot come
-/// from a call and map to the configuration code.
+/// The status of a failed call. A reply the server sent is `ServerError`, whatever
+/// its code: the code travels in its own field. The client's own errors keep the
+/// local statuses. Subscription and deadlock errors cannot come from a call and
+/// map to the configuration code.
 pub(crate) fn status_of(error: &Error) -> i32 {
     match error {
-        Error::Server(server) => i32::try_from(server.code).unwrap_or(i32::MAX),
+        Error::Server(server) => server_status(server),
         Error::ConnectionClosed => ImpulseCentrifugoStatus::ConnectionClosed as i32,
         Error::Timeout => ImpulseCentrifugoStatus::Timeout as i32,
         Error::ClientDisconnected => ImpulseCentrifugoStatus::ClientDisconnected as i32,
@@ -289,6 +315,32 @@ pub(crate) fn status_of(error: &Error) -> i32 {
         Error::Transport { .. } => ImpulseCentrifugoStatus::TransportWriteError as i32,
         Error::InvalidData(_) => ImpulseCentrifugoStatus::InvalidArgument as i32,
         _ => ImpulseCentrifugoStatus::ConfigurationError as i32,
+    }
+}
+
+/// The status of a server error: `ServerError` for every reply the server sent.
+/// A client-local error maps to the status of its code: 3 when the lent token is
+/// spent, 15 unsupported, 16 limit, 17 cancelled, 18 redirect failed.
+fn server_status(server: &ServerError) -> i32 {
+    if !server.is_local() {
+        return ImpulseCentrifugoStatus::ServerError as i32;
+    }
+    match server.code {
+        LOCAL_CODE_TOKEN_REFUSED => ImpulseCentrifugoStatus::ClientDisconnected as i32,
+        LOCAL_CODE_UNSUPPORTED => ImpulseCentrifugoStatus::Unsupported as i32,
+        LOCAL_CODE_LIMIT => ImpulseCentrifugoStatus::Limit as i32,
+        LOCAL_CODE_CANCELLED => ImpulseCentrifugoStatus::Cancelled as i32,
+        LOCAL_CODE_REDIRECT_FAILED => ImpulseCentrifugoStatus::RedirectFailed as i32,
+        _ => ImpulseCentrifugoStatus::ConfigurationError as i32,
+    }
+}
+
+/// The code the server sent for a failed call, or zero when the failure is the
+/// client's own or not a server error.
+pub(crate) fn server_code_of(error: &Error) -> u32 {
+    match error {
+        Error::Server(server) if !server.is_local() => server.code,
+        _ => 0,
     }
 }
 
@@ -834,12 +886,58 @@ mod tests {
     use std::mem::size_of;
     use std::ptr;
 
+    use centrifuge::{Error, ServerError};
+
     use crate::{
         ImpulseCentrifugoClient, ImpulseCentrifugoConfig, ImpulseCentrifugoStatus,
         impulse_centrifugo_client_create, impulse_centrifugo_client_destroy,
     };
 
-    use super::impulse_centrifugo_publish;
+    use super::{impulse_centrifugo_publish, server_code_of, server_status, status_of};
+
+    /// A server error with `code`, as a reply of the server carries it.
+    fn from_server(code: u32) -> Error {
+        let mut server: ServerError = ServerError::default();
+        server.code = code;
+        Error::Server(server)
+    }
+
+    #[test]
+    fn a_server_reply_is_a_server_error_whatever_its_code() {
+        for code in [0_u32, 3, 12, 15, 16, 17, 18, 100, u32::MAX] {
+            let error: Error = from_server(code);
+            assert_eq!(
+                status_of(&error),
+                ImpulseCentrifugoStatus::ServerError as i32
+            );
+            assert_eq!(server_code_of(&error), code);
+        }
+    }
+
+    #[test]
+    fn client_local_errors_keep_their_local_statuses() {
+        let cases: [(u32, ImpulseCentrifugoStatus); 5] = [
+            (3, ImpulseCentrifugoStatus::ClientDisconnected),
+            (15, ImpulseCentrifugoStatus::Unsupported),
+            (16, ImpulseCentrifugoStatus::Limit),
+            (17, ImpulseCentrifugoStatus::Cancelled),
+            (18, ImpulseCentrifugoStatus::RedirectFailed),
+        ];
+        for (code, expected) in cases {
+            let error: ServerError = ServerError::client_local(code, "local".to_owned());
+            assert_eq!(server_status(&error), expected as i32, "local code {code}");
+            assert_eq!(server_code_of(&Error::Server(error)), 0);
+        }
+    }
+
+    #[test]
+    fn a_server_error_is_never_reported_as_success() {
+        for code in [0_u32, 16] {
+            let mut server: ServerError = ServerError::default();
+            server.code = code;
+            assert_ne!(server_status(&server), ImpulseCentrifugoStatus::Ok as i32);
+        }
+    }
 
     #[test]
     fn publish_stays_tracked_until_its_completion_runs() {

@@ -582,7 +582,7 @@ impl Core {
         out.event(Event::Error {
             kind: ClientErrorKind::Connect,
             message: format!("{} ({})", err.message, err.code),
-            source: None,
+            source: Some(Arc::new(crate::types::ServerError::from(err.clone()))),
         });
         if err.code == codes::TOKEN_EXPIRED {
             if self.cfg.has_get_token || self.conn.token == self.conn.connect_token {

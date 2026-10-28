@@ -51,7 +51,7 @@ pub use token_cb::{
 
 /// Version of this C ABI. Bumped when a signature, a struct layout or a status
 /// value changes. The C++ side compares it with the header macro at startup.
-pub const IMPULSE_CENTRIFUGO_ABI_VERSION: u32 = 1;
+pub const IMPULSE_CENTRIFUGO_ABI_VERSION: u32 = 2;
 
 /// Worker threads of the runtime each client handle owns.
 const RUNTIME_WORKER_THREADS: usize = 2;
@@ -73,8 +73,9 @@ const DEFAULT_MAX_SERVER_PING_DELAY_MS: u64 = 10_000;
 const DEFAULT_MAX_PENDING_RPC: u32 = 32;
 
 /// Status of every exported function. Zero is success, positive values are the
-/// client error codes shared with the Java and Swift SDKs, negative values are
-/// ABI errors.
+/// client error codes shared with the Java and Swift SDKs and `ServerError`,
+/// negative values are ABI errors. The code of a server error is carried in its
+/// own field of the reply or event, never as the status.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImpulseCentrifugoStatus {
@@ -113,6 +114,10 @@ pub enum ImpulseCentrifugoStatus {
     Cancelled = 17,
     /// A redirect of a pool call did not complete.
     RedirectFailed = 18,
+    /// The server answered with an error. Its code is in the `server_code` field
+    /// of the reply or event, and its message in the message field. Every server
+    /// error has this status, whatever its code, including zero.
+    ServerError = 19,
 }
 
 /// One HTTP header sent on the WebSocket upgrade. Both strings are NUL-terminated

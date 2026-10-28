@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bytes::Bytes;
 use centrifuge_client_core::proto;
 
+use crate::ServerError;
 use crate::error::Error;
 use crate::msg_id::MsgIdGenerator;
 use crate::shared::{SessionHandle, Shared, lock};
@@ -31,17 +32,10 @@ pub(crate) const CODE_UNSUPPORTED: u32 = 15;
 /// Code of a call stopped with `cancel()`.
 pub(crate) const CODE_CANCELLED: u32 = 17;
 
-/// A client-local error: a code the server never sends.
+/// A client-local error: a code of the client's own, marked as local so that it
+/// is never taken for a code the server sent.
 pub(crate) fn local_error(code: u32, message: &str) -> Error {
-    Error::Server(
-        proto::Error {
-            code,
-            message: message.to_owned(),
-            temporary: false,
-            ..Default::default()
-        }
-        .into(),
-    )
+    Error::Server(ServerError::client_local(code, message.to_owned()))
 }
 
 /// The `rpc` request of a call: its method and data, its headers, and the
@@ -315,6 +309,14 @@ mod tests {
                 assert_eq!(error.code, 17);
                 assert!(!error.temporary);
             }
+            other => panic!("expected a server error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rpc_local_error_is_marked_as_raised_by_the_client() {
+        match local_error(16, "limit exceeded") {
+            Error::Server(error) => assert!(error.is_local()),
             other => panic!("expected a server error, got {other:?}"),
         }
     }

@@ -12,7 +12,7 @@ use centrifuge::{
 
 use crate::events::{
     EventFields, EventSink, ImpulseCentrifugoEvent, ImpulseCentrifugoEventKind, event_of,
-    subscribed_flags, subscription_error_code,
+    server_code_of_source, subscribed_flags, subscription_error_code,
 };
 use crate::rpc::status_of;
 use crate::token_cb::TokenBridge;
@@ -96,6 +96,7 @@ fn with_event_handlers(builder: SubscriptionBuilder, sink: EventSink) -> Subscri
                     channel: subscription.channel(),
                     data: &[],
                     offset: 0,
+                    server_code: 0,
                 }));
             },
         )
@@ -111,6 +112,7 @@ fn with_event_handlers(builder: SubscriptionBuilder, sink: EventSink) -> Subscri
                 channel: subscription.channel(),
                 data: &[],
                 offset,
+                server_code: 0,
             }));
         })
         .on_unsubscribed(
@@ -122,6 +124,7 @@ fn with_event_handlers(builder: SubscriptionBuilder, sink: EventSink) -> Subscri
                     channel: subscription.channel(),
                     data: &[],
                     offset: 0,
+                    server_code: 0,
                 }));
             },
         )
@@ -134,6 +137,7 @@ fn with_event_handlers(builder: SubscriptionBuilder, sink: EventSink) -> Subscri
                     channel: subscription.channel(),
                     data: &[],
                     offset: 0,
+                    server_code: server_code_of_source(event.error.source.as_ref()),
                 }));
             },
         )
@@ -146,6 +150,7 @@ fn with_event_handlers(builder: SubscriptionBuilder, sink: EventSink) -> Subscri
                     channel: subscription.channel(),
                     data: &event.publication.data,
                     offset: event.publication.offset,
+                    server_code: 0,
                 }));
             },
         )

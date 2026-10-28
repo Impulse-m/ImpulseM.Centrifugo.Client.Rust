@@ -50,7 +50,7 @@ fn abi_version_matches_the_constant() {
         impulse_centrifugo_abi_version(),
         IMPULSE_CENTRIFUGO_ABI_VERSION
     );
-    assert_eq!(IMPULSE_CENTRIFUGO_ABI_VERSION, 1);
+    assert_eq!(IMPULSE_CENTRIFUGO_ABI_VERSION, 2);
 }
 
 #[test]
