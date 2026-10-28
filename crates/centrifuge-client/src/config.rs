@@ -320,8 +320,8 @@ pub(crate) mod defaults {
 
     pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
     pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-    pub(crate) const MIN_RECONNECT_DELAY: Duration = Duration::from_millis(500);
-    pub(crate) const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(20);
+    pub(crate) const MIN_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+    pub(crate) const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
     pub(crate) const MAX_SERVER_PING_DELAY: Duration = Duration::from_secs(10);
     pub(crate) const MAX_MESSAGE_SIZE: usize = 64 << 20;
     pub(crate) const MIN_RESUBSCRIBE_DELAY: Duration = Duration::from_millis(500);

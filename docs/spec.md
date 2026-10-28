@@ -256,8 +256,8 @@ struct ClientOptions {
     emulation_endpoint: Option<Url>,    // default: "/emulation" on the HTTP-stream endpoint's origin
     timeout: Duration,                  // command timeout, default 5s
     handshake_timeout: Duration,        // TCP + TLS + upgrade, default 5s
-    min_reconnect_delay: Duration,      // default 500ms
-    max_reconnect_delay: Duration,      // default 20s
+    min_reconnect_delay: Duration,      // default 1s
+    max_reconnect_delay: Duration,      // default 30s
     max_server_ping_delay: Duration,    // default 10s
     tls: Option<TlsConfig>,             // custom TLS connector config
     proxy: ProxyConfig,                 // default ProxyConfig::System, see §5.2

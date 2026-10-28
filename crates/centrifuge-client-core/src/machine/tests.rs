@@ -475,6 +475,83 @@ fn ping_pong_on_current_transport_and_no_ping_reconnects() {
 }
 
 #[test]
+fn reconnect_now_skips_a_pending_backoff() {
+    let mut h = H::json();
+    let t = h.connect();
+    h.take_events();
+    h.push(
+        t,
+        proto::Push {
+            disconnect: Some(proto::Disconnect {
+                code: 3001,
+                reason: "shutdown".into(),
+                reconnect: true,
+            }),
+            ..Default::default()
+        },
+    );
+    h.take_events();
+    let opens_before: usize = h.opens.len();
+    assert!(
+        h.core.timers.is_armed(TimerKey::Reconnect),
+        "backoff pending"
+    );
+    h.op(Op::ReconnectNow);
+    assert_eq!(h.opens.len(), opens_before + 1, "opened at once");
+    assert!(!h.core.timers.is_armed(TimerKey::Reconnect));
+    assert_eq!(h.core.state(), State::Connecting);
+    assert_eq!(h.core.conn.reconnect_attempts, 0, "attempts reset");
+}
+
+#[test]
+fn reconnect_now_is_a_no_op_while_an_attempt_runs() {
+    let mut h = H::json();
+    h.op(Op::Connect);
+    h.take_events();
+    let opens_before: usize = h.opens.len();
+    h.op(Op::ReconnectNow);
+    assert_eq!(h.opens.len(), opens_before, "no second open");
+    assert_eq!(h.core.state(), State::Connecting);
+}
+
+#[test]
+fn reconnect_now_leaves_a_disconnected_client_alone() {
+    let mut h = H::json();
+    h.op(Op::ReconnectNow);
+    assert_eq!(h.core.state(), State::Disconnected);
+    assert!(h.opens.is_empty());
+    assert!(h.take_events().is_empty());
+}
+
+#[test]
+fn reconnect_now_replaces_a_connection_silent_past_the_limit() {
+    let mut h = H::json();
+    let t = h.connect();
+    h.take_events();
+    let last: Instant = h.now;
+    h.now = last + Duration::from_secs(20);
+    h.op(Op::ReconnectNow);
+    assert_eq!(
+        h.core.state(),
+        State::Connected,
+        "silent for 20 s: kept, the limit is 25 s plus the ping delay"
+    );
+    assert!(h.take_events().is_empty());
+    h.now = last + Duration::from_secs(36);
+    let opens_before: usize = h.opens.len();
+    h.op(Op::ReconnectNow);
+    assert_eq!(names(&h.take_events()), ["connecting(2)"]);
+    assert_eq!(
+        h.deadline(TimerKey::Reconnect),
+        h.now,
+        "no backoff: the reconnect is due now"
+    );
+    h.advance(Duration::ZERO);
+    assert_eq!(h.opens.len(), opens_before + 1, "replaced at once");
+    assert_ne!(h.last_open().transport, t, "a new transport");
+}
+
+#[test]
 fn liveness_counts_received_data_not_processed_data() {
     let mut h = H::json();
     h.connect();

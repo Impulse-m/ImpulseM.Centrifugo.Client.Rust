@@ -441,6 +441,8 @@ pub enum Op {
     Disconnect,
     /// `close()`.
     Close,
+    /// `reconnect_now()`.
+    ReconnectNow,
     /// `set_token()`.
     SetToken(String),
     /// `set_data()`.
@@ -971,6 +973,7 @@ impl Core {
             Op::Connect => self.op_connect(now, out),
             Op::Disconnect => self.op_disconnect(now, out),
             Op::Close => self.op_close(now, out),
+            Op::ReconnectNow => self.op_reconnect_now(now, out),
             Op::SetToken(t) => {
                 self.conn.token = t;
                 if !self.cfg.has_get_token {

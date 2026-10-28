@@ -16,6 +16,7 @@ impl Client {                               // Clone + Send + Sync; clones share
     // State changes: never wait. state() reflects them at once; the SDK applies them right after.
     pub fn connect(&self) -> Result<(), Error>;          // Err(ClientClosed) only after close()
     pub fn disconnect(&self);
+    pub fn reconnect_now(&self);                         // skips a pending backoff; replaces a socket silent past 25 s + max_server_ping_delay
     pub fn close(&self) -> impl Future<Output = ()> + Send + 'static; // starts closing when called; await = wait for completion
     pub fn state(&self) -> State;                        // Disconnected | Connecting | Connected | Closed
     pub async fn ready(&self, timeout: Option<Duration>) -> Result<(), Error>; // fails at once when disconnected
@@ -82,8 +83,8 @@ impl ClientBuilder {
     pub fn emulation_endpoint(self, url: impl Into<String>) -> Self;   // default: /emulation on the stream's origin
     pub fn timeout(self, d: Duration) -> Self;                         // 5 s
     pub fn handshake_timeout(self, d: Duration) -> Self;               // 5 s
-    pub fn min_reconnect_delay(self, d: Duration) -> Self;             // 500 ms
-    pub fn max_reconnect_delay(self, d: Duration) -> Self;             // 20 s
+    pub fn min_reconnect_delay(self, d: Duration) -> Self;             // 1 s
+    pub fn max_reconnect_delay(self, d: Duration) -> Self;             // 30 s
     pub fn max_server_ping_delay(self, d: Duration) -> Self;           // 10 s
     pub fn max_message_size(self, bytes: usize) -> Self;               // 64 MiB
     pub fn tls(self, t: TlsConfig) -> Self;

@@ -179,6 +179,14 @@ impl Client {
             });
     }
 
+    /// Reconnects without waiting, for when the app resumes. A pending
+    /// reconnect backoff is skipped and its attempts reset. A connection that
+    /// has been silent for longer than 25 s plus the max server ping delay is
+    /// dropped and replaced. In any other state this does nothing.
+    pub fn reconnect_now(&self) {
+        self.inner.shared.send_client_op(Op::ReconnectNow, |s| s);
+    }
+
     /// Closes the client for good: subscriptions are unsubscribed (code 2),
     /// the connection ends and the driver stops.
     ///
@@ -833,13 +841,13 @@ impl ClientBuilder {
         self
     }
 
-    /// Reconnect backoff minimum (default 500 ms).
+    /// Reconnect backoff minimum (default 1 s).
     pub fn min_reconnect_delay(mut self, d: Duration) -> Self {
         self.min_reconnect_delay = d;
         self
     }
 
-    /// Reconnect backoff maximum (default 20 s).
+    /// Reconnect backoff maximum (default 30 s).
     pub fn max_reconnect_delay(mut self, d: Duration) -> Self {
         self.max_reconnect_delay = d;
         self
@@ -1079,11 +1087,20 @@ fn _assert_traits() {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use crate::config::defaults;
     use crate::error::Error;
 
     use super::Client;
 
     const VALID_INSTANCE: &str = "Install_id-0123456789ABCDEF";
+
+    #[test]
+    fn reconnect_backoff_defaults_are_one_to_thirty_seconds() {
+        assert_eq!(defaults::MIN_RECONNECT_DELAY, Duration::from_secs(1));
+        assert_eq!(defaults::MAX_RECONNECT_DELAY, Duration::from_secs(30));
+    }
 
     #[tokio::test]
     async fn instance_valid_builds() {

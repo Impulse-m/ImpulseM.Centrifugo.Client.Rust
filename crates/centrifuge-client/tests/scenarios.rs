@@ -94,6 +94,36 @@ async fn epoch_change_is_not_recovered() {
     client.close().await;
 }
 
+/// `reconnect_now` skips a pending backoff: the reconnect runs at once instead
+/// of after the 5 s backoff.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconnect_now_skips_the_backoff() {
+    let srv = server().await;
+    let (r, mut ev) = recorder();
+    let client = record_client(
+        builder(&srv, TransportKind::WebSocket, Protocol::Json)
+            .min_reconnect_delay(Duration::from_secs(5))
+            .max_reconnect_delay(Duration::from_secs(5)),
+        &r,
+    )
+    .build()
+    .unwrap();
+    client.connect().unwrap();
+    ev.wait("connected").await;
+    srv.disconnect(3001, "shutdown");
+    assert_eq!(ev.wait("connecting").await, "connecting 3001 shutdown");
+    let started = tokio::time::Instant::now();
+    client.reconnect_now();
+    ev.wait("connected").await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(srv.connects(), 2);
+    client.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_disconnect_code_stops_reconnecting() {
     let srv = server().await;

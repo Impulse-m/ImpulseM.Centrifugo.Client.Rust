@@ -26,6 +26,13 @@ use crate::rpc_call::validate_timeout;
 /// The most redirect fetches a pool may run at once.
 pub(crate) const MAX_REDIRECTS_INFLIGHT: usize = 16;
 
+/// The pool's reconnect backoff minimum, the Swift fork's default (the main
+/// client's backoff is 1 s to 30 s).
+const POOL_MIN_RECONNECT_DELAY: Duration = Duration::from_millis(500);
+
+/// The pool's reconnect backoff maximum, the Swift fork's default.
+const POOL_MAX_RECONNECT_DELAY: Duration = Duration::from_secs(20);
+
 /// Maps an endpoint key to the URLs of its endpoint.
 pub(crate) trait EndpointFn: Fn(&str) -> Vec<String> + MaybeSend + MaybeSync {}
 
@@ -139,8 +146,8 @@ impl RpcPoolOptions {
             name: "rust".to_owned(),
             version: String::new(),
             timeout: defaults::TIMEOUT,
-            min_reconnect_delay: defaults::MIN_RECONNECT_DELAY,
-            max_reconnect_delay: defaults::MAX_RECONNECT_DELAY,
+            min_reconnect_delay: POOL_MIN_RECONNECT_DELAY,
+            max_reconnect_delay: POOL_MAX_RECONNECT_DELAY,
             max_server_ping_delay: defaults::MAX_SERVER_PING_DELAY,
             affinity_header: None,
             max_connections_per_endpoint: 2,

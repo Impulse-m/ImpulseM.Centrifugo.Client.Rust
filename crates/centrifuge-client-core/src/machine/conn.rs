@@ -10,6 +10,10 @@ use super::{
 use crate::codes::{connecting, disconnected};
 use crate::{codes, proto};
 
+/// The silence after which `reconnect_now` replaces a connection, before the
+/// max server ping delay is added.
+const SILENT_LIMIT: Duration = Duration::from_secs(25);
+
 /// The transport of the current attempt.
 #[derive(Debug, Clone)]
 pub(super) struct Transport {
@@ -40,6 +44,8 @@ pub(super) struct Conn {
     pub(super) client_refresh: bool,
     pub(super) token_expires_at: Option<Instant>,
     pub(super) ping_window: Option<Duration>,
+    /// When the current connection last delivered a decoded item.
+    pub(super) last_received: Option<Instant>,
     pub(super) pong: bool,
     pub(super) reconnect_attempts: u32,
     pub(super) reset_pending: bool,
@@ -65,6 +71,7 @@ impl Conn {
             client_refresh: false,
             token_expires_at: None,
             ping_window: None,
+            last_received: None,
             pong: false,
             reconnect_attempts: 0,
             reset_pending: false,
@@ -141,6 +148,35 @@ impl Core {
                 now,
                 out,
             );
+        }
+    }
+
+    /// `reconnect_now()`: skips a pending backoff (resetting the attempts), or
+    /// replaces a connection silent for longer than [`SILENT_LIMIT`] plus the
+    /// max server ping delay. Any other state is left alone.
+    pub(super) fn op_reconnect_now(&mut self, now: Instant, out: &mut Outputs) {
+        match self.state {
+            State::Connecting => {
+                if !self.timers.is_armed(TimerKey::Reconnect) {
+                    return;
+                }
+                self.timers.cancel(TimerKey::Reconnect);
+                self.conn.reconnect_attempts = 0;
+                self.start_attempt(now, out);
+            }
+            State::Connected => {
+                let Some(last) = self.conn.last_received else {
+                    return;
+                };
+                let limit: Duration = SILENT_LIMIT + self.cfg.max_server_ping_delay;
+                if now.duration_since(last) <= limit {
+                    return;
+                }
+                self.conn.reconnect_attempts = 0;
+                self.conn.immediate = true;
+                self.teardown(connecting::NO_PING, "no ping", true, now, out);
+            }
+            State::Disconnected | State::Closed => {}
         }
     }
 
@@ -554,6 +590,7 @@ impl Core {
             return;
         }
         self.stats.messages_in += 1;
+        self.conn.last_received = Some(now);
         if let Some(t) = self.conn.current.as_mut() {
             t.got_message = true;
         }
