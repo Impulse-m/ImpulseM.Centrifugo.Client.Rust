@@ -669,6 +669,7 @@ pub struct ClientBuilder {
     http_headers: http::HeaderMap,
     emulated_headers: HashMap<String, String>,
     emulation_endpoint: Option<String>,
+    websocket_subprotocol: bool,
     timeout: Duration,
     handshake_timeout: Duration,
     min_reconnect_delay: Duration,
@@ -712,6 +713,7 @@ impl ClientBuilder {
             http_headers: http::HeaderMap::new(),
             emulated_headers: HashMap::new(),
             emulation_endpoint: None,
+            websocket_subprotocol: true,
             timeout: defaults::TIMEOUT,
             handshake_timeout: defaults::HANDSHAKE_TIMEOUT,
             min_reconnect_delay: defaults::MIN_RECONNECT_DELAY,
@@ -793,6 +795,15 @@ impl ClientBuilder {
     /// and every emulation request.
     pub fn http_headers(mut self, headers: http::HeaderMap) -> Self {
         self.http_headers = headers;
+        self
+    }
+
+    /// Whether a WebSocket with the Protobuf protocol requests the
+    /// `centrifuge-protobuf` subprotocol (default `true`). Turn it off for an
+    /// endpoint that selects Protobuf in its URL with `cf_protocol=protobuf`,
+    /// as the pool fleet does. JSON never sends the subprotocol.
+    pub fn websocket_subprotocol(mut self, enabled: bool) -> Self {
+        self.websocket_subprotocol = enabled;
         self
     }
 
@@ -1031,6 +1042,7 @@ impl ClientBuilder {
                 endpoints,
                 emulation_endpoint,
                 max_message_size: self.max_message_size,
+                websocket_subprotocol: self.websocket_subprotocol,
                 get_token: self.get_token,
             },
             dispatcher,

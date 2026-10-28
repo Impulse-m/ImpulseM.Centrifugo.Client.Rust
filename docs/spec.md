@@ -529,7 +529,7 @@ Errors implement `std::error::Error` with `source()`. `TokenError` is the one ex
 ### 5.1 Transport
 
 - Two transports: WebSocket (`ws://`, `wss://`) and HTTP-streaming with emulation (`http://`, `https://`, §5.7). Other schemes are rejected at construction. The rest of this section is about WebSocket.
-- Protobuf: request the `centrifuge-protobuf` subprotocol. Frames are binary.
+- Protobuf: request the `centrifuge-protobuf` subprotocol. Frames are binary. `websocket_subprotocol(false)` turns the request off, for an endpoint that selects Protobuf in its URL with `cf_protocol=protobuf`. The rpc pool sets it off for every connection, so its endpoint URLs must carry `cf_protocol=protobuf`.
 - JSON: no subprotocol. Frames are text.
 - **Two kinds of headers.** They're named after the server options that forward them to the connect proxy, because Centrifugo keeps them apart: "the `http_headers` list never forwards emulated values". No option is called just `headers`, so the two can't be confused. In the Rust API, `headers` appears only as the wire field of `ConnectRequest`, which `emulated_headers` fills.
   - `http_headers`: real HTTP headers on the WebSocket upgrade, the HTTP-stream request and every emulation request. They're also visible to anything in front of Centrifugo (an API gateway checking `Authorization`, a load balancer routing on a header, a WAF). Forwarded by the server via `http_headers`.

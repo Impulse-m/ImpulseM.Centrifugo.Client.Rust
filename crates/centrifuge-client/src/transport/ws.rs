@@ -113,7 +113,7 @@ async fn open(ctx: &Ctx) -> Result<Ws, CloseReason> {
     for (k, v) in &ctx.http_headers {
         req.headers_mut().append(k, v.clone());
     }
-    if ctx.protocol == Protocol::Protobuf {
+    if ctx.protocol == Protocol::Protobuf && ctx.websocket_subprotocol {
         req.headers_mut().insert(
             "Sec-WebSocket-Protocol",
             http::HeaderValue::from_static("centrifuge-protobuf"),

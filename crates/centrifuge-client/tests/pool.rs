@@ -22,8 +22,15 @@ use centrifuge::{
 use common::*;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-/// Pool options for one endpoint URL, with the defaults otherwise.
-fn options_for(url: String) -> RpcPoolOptions {
+/// The endpoint URL of the pool fleet: Protobuf is selected in the query, as
+/// the fleet does, not by the subprotocol header.
+fn pool_url(srv: &FakeServer) -> String {
+    format!("{}?cf_protocol=protobuf", srv.ws_url())
+}
+
+/// Pool options for one fake server, with the defaults otherwise.
+fn options_for(srv: &FakeServer) -> RpcPoolOptions {
+    let url: String = pool_url(srv);
     RpcPoolOptions::new(move |_: &str| vec![url.clone()])
 }
 
@@ -70,7 +77,7 @@ async fn pool_call_before_the_main_client_connects_fails_with_client_disconnecte
     let main: Client = builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
         .build()
         .unwrap();
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     let result = pool
         .rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
         .await;
@@ -82,7 +89,7 @@ async fn pool_call_before_the_main_client_connects_fails_with_client_disconnecte
 async fn pool_call_is_answered_by_a_pooled_connection() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     let reply = pool
         .rpc("chat", "echo", "payload", RpcPoolCallOptions::default())
         .await
@@ -95,7 +102,7 @@ async fn pool_call_is_answered_by_a_pooled_connection() {
 async fn pool_affinity_without_the_affinity_header_fails_with_configuration_error() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     let options: RpcPoolCallOptions = RpcPoolCallOptions {
         affinity: Some("shard-1".to_owned()),
         ..Default::default()
@@ -108,7 +115,7 @@ async fn pool_affinity_without_the_affinity_header_fails_with_configuration_erro
 async fn pool_call_timeout_above_the_pool_timeout_fails_with_configuration_error() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     let options: RpcPoolCallOptions = RpcPoolCallOptions {
         timeout: Some(Duration::from_secs(60)),
         ..Default::default()
@@ -121,7 +128,7 @@ async fn pool_call_timeout_above_the_pool_timeout_fails_with_configuration_error
 async fn pool_calls_share_one_connection_while_it_has_slots() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.max_inflight_per_connection = 2;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     let first = pool.rpc("chat", "echo", "one", RpcPoolCallOptions::default());
@@ -137,7 +144,7 @@ async fn pool_full_line_refuses_a_call_with_code_16() {
     let srv = server().await;
     hold_method(&srv, "slow");
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.max_connections_per_endpoint = 1;
     options.max_queued = 0;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
@@ -164,7 +171,7 @@ async fn pool_waiting_call_fails_with_timeout_at_its_deadline() {
     let srv = server().await;
     hold_method(&srv, "slow");
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.max_connections_per_endpoint = 1;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     let held_pool: RpcPool = pool.clone();
@@ -189,7 +196,7 @@ async fn pool_waiting_call_fails_with_timeout_at_its_deadline() {
 async fn pool_idle_connection_closes_after_the_idle_timeout() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.idle_timeout = Duration::from_millis(100);
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     pool.rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
@@ -203,7 +210,7 @@ async fn pool_idle_connection_closes_after_the_idle_timeout() {
 async fn pool_zero_idle_timeout_keeps_the_connection_until_close() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.idle_timeout = Duration::ZERO;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     pool.rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
@@ -219,7 +226,7 @@ async fn pool_zero_idle_timeout_keeps_the_connection_until_close() {
 async fn pool_closed_pool_refuses_later_calls_with_client_closed() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     pool.close();
     let result = pool
         .rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
@@ -232,7 +239,7 @@ async fn pool_close_fails_a_waiting_call_with_code_17() {
     let srv = server().await;
     hold_method(&srv, "slow");
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.max_connections_per_endpoint = 1;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     let held_pool: RpcPool = pool.clone();
@@ -266,7 +273,7 @@ async fn pool_close_fails_a_waiting_call_with_code_17() {
 async fn pool_call_after_the_main_client_closed_ends_the_idle_connections() {
     let srv = server().await;
     let main: Client = connected_main(&srv).await;
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.idle_timeout = Duration::ZERO;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     pool.rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
@@ -347,7 +354,7 @@ async fn pool_later_signal_resends_until_retries_run_out() {
     let metadata: HashMap<String, String> =
         HashMap::from([("x-centrifugo-retry".to_owned(), "later".to_owned())]);
     refuse_method(&srv, "echo", Arc::clone(&attempts), metadata);
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.retries = 2;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     let result = pool
@@ -369,7 +376,7 @@ async fn pool_zero_retries_sends_no_resend_on_the_later_signal() {
     let metadata: HashMap<String, String> =
         HashMap::from([("x-centrifugo-retry".to_owned(), "later".to_owned())]);
     refuse_method(&srv, "echo", Arc::clone(&attempts), metadata);
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.retries = 0;
     let pool: RpcPool = RpcPool::new(&main, options).unwrap();
     let result = pool
@@ -400,7 +407,7 @@ async fn pool_call_lost_to_a_message_size_close_is_not_resent() {
             reason: "message too big".into(),
         })
     });
-    let pool: RpcPool = RpcPool::new(&main, options_for(srv.ws_url())).unwrap();
+    let pool: RpcPool = RpcPool::new(&main, options_for(&srv)).unwrap();
     let result = pool
         .rpc("chat", "echo", "{}", RpcPoolCallOptions::default())
         .await;
@@ -420,7 +427,7 @@ async fn pool_later_resend_on_a_full_line_is_not_refused_with_code_16() {
     let metadata: HashMap<String, String> =
         HashMap::from([("x-centrifugo-retry".to_owned(), "later".to_owned())]);
     refuse_method(&srv, "echo", Arc::clone(&attempts), metadata);
-    let mut options: RpcPoolOptions = options_for(srv.ws_url());
+    let mut options: RpcPoolOptions = options_for(&srv);
     options.max_connections_per_endpoint = 1;
     options.max_queued = 0;
     options.retries = 1;
@@ -446,8 +453,8 @@ async fn pool_reroute_moves_a_refused_call_to_the_key_the_hook_names() {
     let main: Client = connected_main(&refusing).await;
     let attempts: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     refuse_method(&refusing, "echo", Arc::clone(&attempts), HashMap::new());
-    let refusing_url: String = refusing.ws_url();
-    let answering_url: String = answering.ws_url();
+    let refusing_url: String = pool_url(&refusing);
+    let answering_url: String = pool_url(&answering);
     let options: RpcPoolOptions = RpcPoolOptions::new(move |key: &str| match key {
         "first" => vec![refusing_url.clone()],
         "second" => vec![answering_url.clone()],
@@ -490,8 +497,8 @@ async fn pool_reroute_move_joins_the_front_of_the_target_line() {
         }
         None
     });
-    let refusing_url: String = refusing.ws_url();
-    let answering_url: String = answering.ws_url();
+    let refusing_url: String = pool_url(&refusing);
+    let answering_url: String = pool_url(&answering);
     let mut options: RpcPoolOptions = RpcPoolOptions::new(move |key: &str| match key {
         "first" => vec![refusing_url.clone()],
         "second" => vec![answering_url.clone()],
@@ -554,7 +561,7 @@ async fn pool_redirect_returns_the_bytes_the_hook_names() {
     let main: Client = connected_main(&srv).await;
     let file_url: String = serve_bytes("200 OK", b"fetched-bytes").await;
     let options: RpcPoolOptions =
-        options_for(srv.ws_url()).redirect(move |outcome: &RpcPoolOutcome| match outcome {
+        options_for(&srv).redirect(move |outcome: &RpcPoolOutcome| match outcome {
             RpcPoolOutcome::Reply(_) => Some(RpcPoolRedirect::new(file_url.clone())),
             _ => None,
         });
@@ -572,7 +579,7 @@ async fn pool_redirect_body_over_max_redirect_bytes_fails_with_code_18() {
     let main: Client = connected_main(&srv).await;
     let file_url: String = serve_bytes("200 OK", b"fetched-bytes").await;
     let mut options: RpcPoolOptions =
-        options_for(srv.ws_url()).redirect(move |outcome: &RpcPoolOutcome| match outcome {
+        options_for(&srv).redirect(move |outcome: &RpcPoolOutcome| match outcome {
             RpcPoolOutcome::Reply(_) => Some(RpcPoolRedirect::new(file_url.clone())),
             _ => None,
         });

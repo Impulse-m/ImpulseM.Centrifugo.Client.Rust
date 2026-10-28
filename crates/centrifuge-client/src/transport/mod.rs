@@ -5,6 +5,7 @@
 #[cfg(feature = "http-stream")]
 mod http_stream;
 pub(crate) mod net;
+mod proxy;
 mod ws;
 
 use std::sync::Arc;
@@ -148,6 +149,8 @@ pub(crate) struct Ctx {
     pub(crate) url: Url,
     pub(crate) protocol: Protocol,
     pub(crate) max_message_size: usize,
+    /// Request the `centrifuge-protobuf` subprotocol with Protobuf.
+    pub(crate) websocket_subprotocol: bool,
     pub(crate) http_headers: http::HeaderMap,
     #[cfg_attr(not(feature = "http-stream"), allow(dead_code))]
     pub(crate) emulation_endpoint: Option<Url>,

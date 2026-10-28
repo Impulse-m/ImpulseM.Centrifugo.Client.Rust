@@ -11,7 +11,10 @@ mod common;
 
 use std::time::Duration;
 
-use centrifuge::{Error, HistoryOptions, Protocol, State, SubState, TransportKind};
+use centrifuge::{
+    Client, Error, HistoryOptions, Protocol, ProxyConfig, State, SubState, TransportEndpoint,
+    TransportKind,
+};
 use common::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -307,6 +310,52 @@ async fn headers_emulated_headers_and_data() {
         assert_eq!(&subs.last().unwrap().data[..], br#"{"s":2}"#);
         client.close().await;
     }
+}
+
+/// The `centrifuge-protobuf` subprotocol goes on a Protobuf WebSocket by
+/// default. An endpoint that selects Protobuf in its URL (the pool fleet,
+/// `cf_protocol=protobuf`) connects with the subprotocol turned off, and the
+/// server still decodes its protobuf frames.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transport_subprotocol_follows_the_fleet() {
+    let srv = server().await;
+    let update = builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    update.connect().unwrap();
+    update.ready(Some(Duration::from_secs(5))).await.unwrap();
+    let before = srv.requests().len();
+
+    let pool_url = format!("{}?cf_protocol=protobuf", srv.ws_url());
+    let pool = Client::builder_with_transports([TransportEndpoint::websocket(pool_url)])
+        .protocol(Protocol::Protobuf)
+        .proxy(ProxyConfig::None)
+        .websocket_subprotocol(false)
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    pool.connect().unwrap();
+    pool.ready(Some(Duration::from_secs(5))).await.unwrap();
+
+    let reqs = srv.requests();
+    let subprotocol = |h: &http::HeaderMap| {
+        h.get("sec-websocket-protocol")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        subprotocol(&reqs[0].1).as_deref(),
+        Some("centrifuge-protobuf"),
+        "the update socket requests the subprotocol"
+    );
+    assert_eq!(reqs.len(), before + 1, "one upgrade for the pool client");
+    assert_eq!(
+        subprotocol(&reqs[before].1),
+        None,
+        "the pool socket doesn't request the subprotocol"
+    );
+    update.close().await;
+    pool.close().await;
 }
 
 /// `get_state` is asked before a subscribe without a position; its position is

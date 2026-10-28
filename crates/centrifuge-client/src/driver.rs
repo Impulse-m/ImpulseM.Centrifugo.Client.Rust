@@ -56,6 +56,7 @@ pub(crate) struct DriverConfig {
     pub(crate) endpoints: Vec<(TransportKind, Url)>,
     pub(crate) emulation_endpoint: Option<Url>,
     pub(crate) max_message_size: usize,
+    pub(crate) websocket_subprotocol: bool,
     pub(crate) get_token: Option<ConnTokenGetter>,
 }
 
@@ -478,6 +479,7 @@ impl Driver {
             url,
             protocol: self.core.protocol(),
             max_message_size: self.cfg.max_message_size,
+            websocket_subprotocol: self.cfg.websocket_subprotocol,
             http_headers: lock(&self.shared.http_headers).clone(),
             emulation_endpoint: self.cfg.emulation_endpoint.clone(),
             timeout: self.shared.cfg.timeout,

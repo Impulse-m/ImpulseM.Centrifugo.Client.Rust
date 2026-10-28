@@ -149,11 +149,18 @@ async fn websocket(inner: Arc<Inner>, mut req: Request<Incoming>) -> Response<Bo
     let Some(key) = req.headers().get("sec-websocket-key").cloned() else {
         return full(StatusCode::BAD_REQUEST, "not a WebSocket upgrade");
     };
-    let protobuf = req
+    // Protobuf is chosen by the subprotocol header or by `cf_protocol=protobuf`
+    // in the query (the pool fleet), as Centrifugo chooses it.
+    let query_protobuf = req
+        .uri()
+        .query()
+        .is_some_and(|q| q.split('&').any(|pair| pair == "cf_protocol=protobuf"));
+    let header_protobuf = req
         .headers()
         .get("sec-websocket-protocol")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.split(',').any(|p| p.trim() == "centrifuge-protobuf"));
+    let protobuf = query_protobuf || header_protobuf;
     let protocol = if protobuf {
         Protocol::Protobuf
     } else {
@@ -174,7 +181,7 @@ async fn websocket(inner: Arc<Inner>, mut req: Request<Incoming>) -> Response<Bo
         "sec-websocket-accept",
         accept.parse().expect("base64 is a valid header"),
     );
-    if protobuf {
+    if header_protobuf {
         h.insert(
             "sec-websocket-protocol",
             "centrifuge-protobuf".parse().expect("static header"),

@@ -769,6 +769,7 @@ impl PoolInner {
             .min_reconnect_delay(self.options.min_reconnect_delay)
             .max_reconnect_delay(self.options.max_reconnect_delay)
             .max_server_ping_delay(self.options.max_server_ping_delay)
+            .websocket_subprotocol(false)
             .on_connected(move |_: &Client, _: ConnectedEvent| {
                 if let Some(pool) = connected_pool.upgrade() {
                     pool.connection_connected(&connected_url, id);
