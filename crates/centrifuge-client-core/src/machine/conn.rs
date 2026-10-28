@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::timers::backoff;
+use super::timers::{backoff, token_retry_delay};
 use super::{
     CallbackError, ClientErrorKind, CloseReason, Core, CoreConfig, Event, Flow, OpenRequest,
     Outputs, Pending, Session, State, SubState, TimerKey, TransportId, TransportKind,
@@ -13,6 +13,43 @@ use crate::{codes, proto};
 /// The silence after which `reconnect_now` replaces a connection, before the
 /// max server ping delay is added.
 const SILENT_LIMIT: Duration = Duration::from_secs(25);
+
+/// The server code of a refresh that refuses the identity change of its token:
+/// the connection keeps its identity and is not refreshed again.
+const REFRESH_REFUSED_IDENTITY: u32 = 103;
+
+/// What a failed token refresh does next (docs/spec.md §6.6).
+#[derive(Debug)]
+pub(super) enum RefreshFailure {
+    /// Reported, not retried: the connection runs to its expiry (103).
+    Keep,
+    /// Retried after the backoff with a fresh token. `refused_expired` is set
+    /// for 109, so the refused token is remembered.
+    Retry { refused_expired: bool },
+    /// The connection ends with the server's code.
+    End(proto::Error),
+}
+
+/// Decides what a failed token refresh does next. A failure that is not a
+/// server reply (`None`, a timeout) is retried; so are client errors (codes
+/// below 100), temporary errors and 109. Any other server error ends the
+/// connection.
+pub(super) fn refresh_failure(err: Option<proto::Error>) -> RefreshFailure {
+    let Some(e) = err else {
+        return RefreshFailure::Retry {
+            refused_expired: false,
+        };
+    };
+    if e.code == REFRESH_REFUSED_IDENTITY {
+        return RefreshFailure::Keep;
+    }
+    if e.code < 100 || e.temporary || e.code == codes::TOKEN_EXPIRED {
+        return RefreshFailure::Retry {
+            refused_expired: e.code == codes::TOKEN_EXPIRED,
+        };
+    }
+    RefreshFailure::End(e)
+}
 
 /// The transport of the current attempt.
 #[derive(Debug, Clone)]
@@ -43,6 +80,11 @@ pub(super) struct Conn {
     /// Client-side refresh mode: the connect or last refresh reply had `expires`.
     pub(super) client_refresh: bool,
     pub(super) token_expires_at: Option<Instant>,
+    /// Consecutive failed token refreshes: the step of the next retry.
+    pub(super) token_failures: u32,
+    /// The token the server refused as expired on a refresh, kept for
+    /// `stop_on_refused_token`.
+    pub(super) refused_token: Option<String>,
     pub(super) ping_window: Option<Duration>,
     /// When the current connection last delivered a decoded item.
     pub(super) last_received: Option<Instant>,
@@ -70,6 +112,8 @@ impl Conn {
             node: String::new(),
             client_refresh: false,
             token_expires_at: None,
+            token_failures: 0,
+            refused_token: None,
             ping_window: None,
             last_received: None,
             pong: false,
@@ -530,6 +574,7 @@ impl Core {
         let transport = t.id;
         self.conn.transport_was_open = true;
         self.conn.refresh_required = false;
+        self.conn.token_failures = 0;
         self.state = State::Connected;
         self.conn.session.clone_from(&res.session);
         self.conn.node.clone_from(&res.node);
@@ -624,8 +669,8 @@ impl Core {
                     channel,
                     generation,
                 } => self.on_unsubscribe_reply(&channel, generation, reply, now, out),
-                Pending::Refresh { generation } => {
-                    self.on_refresh_reply(generation, reply, now, out);
+                Pending::Refresh { generation, token } => {
+                    self.on_refresh_reply(generation, token, reply, now, out);
                 }
                 Pending::SubRefresh {
                     sub,
@@ -1062,15 +1107,14 @@ impl Core {
             .push(super::Callback::ConnectionToken { flow });
     }
 
-    fn refresh_retry_delay(&mut self, now: Instant) -> Duration {
-        let mut d = self
-            .rng
-            .between(Duration::from_secs(5), Duration::from_secs(10));
-        if let Some(exp) = self.conn.token_expires_at {
-            let left = exp.saturating_duration_since(now);
-            d = d.min(left.max(Duration::from_secs(1)));
-        }
-        d
+    /// Arms the retry of a failed token refresh after the delay of the failure
+    /// count, and counts the failure. The delay never depends on the token's
+    /// expiry (docs/spec.md §6.6).
+    fn arm_token_retry(&mut self, now: Instant) {
+        let step: u32 = self.conn.token_failures;
+        self.conn.token_failures = step.saturating_add(1);
+        let delay: Duration = token_retry_delay(&mut self.rng, step, self.cfg.token_retry_cap);
+        self.timers.arm_after(TimerKey::Refresh, now, delay);
     }
 
     pub(super) fn on_connection_token(
@@ -1113,15 +1157,28 @@ impl Core {
                 }
                 match result {
                     Ok(Some(t)) if !t.is_empty() => {
+                        // A token the server refused as expired is not sent
+                        // again (stop_on_refused_token): the connection runs to
+                        // its expiry, and the next connect asks the getter.
+                        if self.cfg.stop_on_refused_token
+                            && self.conn.refused_token.as_deref() == Some(t.as_str())
+                        {
+                            self.conn.refresh_required = true;
+                            return;
+                        }
                         self.conn.token.clone_from(&t);
                         let Some(transport) = self.conn.current.as_ref().map(|t| t.id) else {
                             return;
                         };
                         let cmd = proto::Command {
-                            refresh: Some(proto::RefreshRequest { token: t }),
+                            refresh: Some(proto::RefreshRequest { token: t.clone() }),
                             ..Default::default()
                         };
-                        self.send(transport, cmd, Pending::Refresh { generation }, now, out);
+                        let pending = Pending::Refresh {
+                            generation,
+                            token: t,
+                        };
+                        self.send(transport, cmd, pending, now, out);
                     }
                     Ok(_) | Err(CallbackError::Unauthorized) => {
                         self.teardown(disconnected::UNAUTHORIZED, "unauthorized", false, now, out);
@@ -1132,8 +1189,7 @@ impl Core {
                             message: e.to_string(),
                             source: Some(e),
                         });
-                        let d = self.refresh_retry_delay(now);
-                        self.timers.arm_after(TimerKey::Refresh, now, d);
+                        self.arm_token_retry(now);
                     }
                 }
             }
@@ -1144,6 +1200,7 @@ impl Core {
     pub(super) fn on_refresh_reply(
         &mut self,
         generation: u64,
+        token: String,
         reply: proto::Reply,
         now: Instant,
         out: &mut Outputs,
@@ -1152,13 +1209,17 @@ impl Core {
             return;
         }
         if let Some(err) = reply.error {
-            self.on_refresh_failed(generation, Some(err), now, out);
+            self.on_refresh_failed(generation, token, Some(err), now, out);
             return;
         }
         let Some(r) = reply.refresh else {
             self.terminate(disconnected::BAD_PROTOCOL, "malformed reply", now, out);
             return;
         };
+        // The server accepted the token: the failure count and the refusal
+        // memory restart (docs/spec.md §6.6).
+        self.conn.token_failures = 0;
+        self.conn.refused_token = None;
         self.conn.client_refresh = r.expires;
         if r.expires {
             let ttl = Duration::from_secs(u64::from(r.ttl.max(1)));
@@ -1173,6 +1234,7 @@ impl Core {
     pub(super) fn on_refresh_failed(
         &mut self,
         generation: u64,
+        token: String,
         err: Option<proto::Error>,
         now: Instant,
         out: &mut Outputs,
@@ -1180,22 +1242,25 @@ impl Core {
         if self.state != State::Connected || generation != self.generation {
             return;
         }
-        match err {
-            Some(e) if !e.temporary => {
-                self.teardown(e.code, &e.message, false, now, out);
+        let message = match &err {
+            Some(e) => format!("{} ({})", e.message, e.code),
+            None => "refresh timed out".to_string(),
+        };
+        out.event(Event::Error {
+            kind: ClientErrorKind::Refresh,
+            message,
+            source: None,
+        });
+        match refresh_failure(err) {
+            RefreshFailure::Keep => {}
+            RefreshFailure::Retry { refused_expired } => {
+                if refused_expired {
+                    self.conn.refused_token = Some(token);
+                }
+                self.arm_token_retry(now);
             }
-            e => {
-                let message = e.map_or_else(
-                    || "refresh timed out".to_string(),
-                    |e| format!("{} ({})", e.message, e.code),
-                );
-                out.event(Event::Error {
-                    kind: ClientErrorKind::Refresh,
-                    message,
-                    source: None,
-                });
-                let d = self.refresh_retry_delay(now);
-                self.timers.arm_after(TimerKey::Refresh, now, d);
+            RefreshFailure::End(e) => {
+                self.teardown(e.code, &e.message, false, now, out);
             }
         }
     }

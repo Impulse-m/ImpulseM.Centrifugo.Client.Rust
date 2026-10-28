@@ -350,6 +350,11 @@ pub struct CoreConfig {
     pub max_server_ping_delay: Duration,
     /// Incoming message size limit (also caps delta outputs).
     pub max_message_size: usize,
+    /// The longest delay before a failed token refresh is tried again.
+    pub token_retry_cap: Duration,
+    /// Whether a token refused as expired (109) by a timer refresh is not sent
+    /// again: the next connect asks the getter for a token.
+    pub stop_on_refused_token: bool,
     /// Seed for backoff jitter.
     pub seed: u64,
 }
@@ -372,6 +377,8 @@ impl Default for CoreConfig {
             max_reconnect_delay: Duration::from_secs(20),
             max_server_ping_delay: Duration::from_secs(10),
             max_message_size: 64 << 20,
+            token_retry_cap: Duration::from_secs(300),
+            stop_on_refused_token: true,
             seed: 0x5EED,
         }
     }
@@ -719,6 +726,7 @@ enum Pending {
     },
     Refresh {
         generation: u64,
+        token: String,
     },
     SubRefresh {
         sub: SubKey,
@@ -1091,7 +1099,9 @@ impl Core {
                 channel,
                 generation,
             } => self.on_unsubscribe_failed(&channel, generation, now, out),
-            Pending::Refresh { generation } => self.on_refresh_failed(generation, None, now, out),
+            Pending::Refresh { generation, token } => {
+                self.on_refresh_failed(generation, token, None, now, out);
+            }
             Pending::SubRefresh {
                 sub,
                 session,
@@ -1160,8 +1170,8 @@ impl Core {
                     self.on_unsubscribe_failed(&channel, generation, now, out);
                     return;
                 }
-                Pending::Refresh { generation } => {
-                    self.on_refresh_failed(generation, None, now, out);
+                Pending::Refresh { generation, token } => {
+                    self.on_refresh_failed(generation, token, None, now, out);
                 }
                 Pending::SubRefresh {
                     sub,

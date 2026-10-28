@@ -327,6 +327,8 @@ pub(crate) mod defaults {
     pub(crate) const MIN_RESUBSCRIBE_DELAY: Duration = Duration::from_millis(500);
     pub(crate) const MAX_RESUBSCRIBE_DELAY: Duration = Duration::from_secs(20);
     pub(crate) const MAX_PENDING_RPC: u32 = 32;
+    pub(crate) const TOKEN_RETRY_CAP: Duration = Duration::from_secs(300);
+    pub(crate) const STOP_ON_REFUSED_TOKEN: bool = true;
 }
 
 /// The longest duration an option takes. Larger values (e.g. `Duration::MAX`

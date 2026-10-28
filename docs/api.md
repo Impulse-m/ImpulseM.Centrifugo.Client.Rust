@@ -86,6 +86,8 @@ impl ClientBuilder {
     pub fn min_reconnect_delay(self, d: Duration) -> Self;             // 1 s
     pub fn max_reconnect_delay(self, d: Duration) -> Self;             // 30 s
     pub fn max_server_ping_delay(self, d: Duration) -> Self;           // 10 s
+    pub fn token_retry_cap(self, d: Duration) -> Self;                 // 300 s: longest delay before a failed token refresh is retried
+    pub fn stop_on_refused_token(self, stop: bool) -> Self;            // true: a token refused as expired (109) is not sent again
     pub fn max_message_size(self, bytes: usize) -> Self;               // 64 MiB
     pub fn tls(self, t: TlsConfig) -> Self;
     pub fn proxy(self, p: ProxyConfig) -> Self;                        // ProxyConfig::System (default)

@@ -1938,3 +1938,263 @@ fn backoff_jitter_with_huge_bounds_does_not_overflow() {
         let _ = super::timers::backoff(&mut r, attempt, Duration::MAX, Duration::MAX);
     }
 }
+
+/// Connects with a token that expires in 10 s, and runs to the first refresh.
+fn expiring_connection(stop_on_refused_token: bool) -> (H, TransportId) {
+    let mut h = H::new(CoreConfig {
+        has_get_token: true,
+        token: "t0".into(),
+        stop_on_refused_token,
+        ..CoreConfig::default()
+    });
+    let t = h.connect_with(proto::ConnectResult {
+        expires: true,
+        ttl: 10,
+        ping: 25,
+        pong: true,
+        ..Default::default()
+    });
+    h.take_events();
+    h.advance(Duration::from_secs(10));
+    (h, t)
+}
+
+/// Answers the refresh getter with `token`.
+fn settle_refresh_getter(h: &mut H, token: &str) {
+    let Some(Callback::ConnectionToken { flow }) = h.callbacks.pop() else {
+        panic!("refresh getter")
+    };
+    h.step(Input::TokenSettled {
+        flow,
+        result: Ok(Some(token.into())),
+    });
+}
+
+/// The id of the refresh command in `cmds`.
+fn refresh_id(cmds: &[proto::Command]) -> u32 {
+    cmds.iter().find(|c| c.refresh.is_some()).unwrap().id
+}
+
+#[test]
+fn refused_expired_token_is_not_resent_and_the_next_connect_asks_the_getter() {
+    let (mut h, t) = expiring_connection(true);
+    settle_refresh_getter(&mut h, "t1");
+    let cmds = h.take_commands();
+    let r = cmds.iter().find(|c| c.refresh.is_some()).unwrap();
+    assert_eq!(r.refresh.as_ref().unwrap().token, "t1");
+    let id = r.id;
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            error: Some(proto::Error {
+                code: 109,
+                message: "token expired".into(),
+                temporary: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(h.core.conn.refused_token.as_deref(), Some("t1"));
+    assert_eq!(
+        h.core.state(),
+        State::Connected,
+        "a 109 is retried, not terminal"
+    );
+    let retry = h.deadline(TimerKey::Refresh) - h.now;
+    assert!(
+        retry >= Duration::from_secs(10) && retry <= Duration::from_secs(20),
+        "{retry:?}"
+    );
+
+    // The retry asks the getter, which hands back the refused token.
+    h.advance(Duration::from_secs(20));
+    settle_refresh_getter(&mut h, "t1");
+    assert!(
+        !h.take_commands().iter().any(|c| c.refresh.is_some()),
+        "the refused token is not sent again"
+    );
+    assert!(h.core.conn.refresh_required);
+    assert!(!h.core.timers.is_armed(TimerKey::Refresh));
+    assert_eq!(h.core.state(), State::Connected);
+
+    // The connection ends; the next connect asks the getter for a new token.
+    h.step(Input::Closed {
+        transport: t,
+        reason: CloseReason::Eof,
+    });
+    h.advance(Duration::from_secs(30));
+    let Some(Callback::ConnectionToken { flow }) = h.callbacks.pop() else {
+        panic!("the reconnect asks the getter")
+    };
+    h.step(Input::TokenSettled {
+        flow,
+        result: Ok(Some("t2".into())),
+    });
+    h.step(Input::Opened {
+        transport: h.last_open().transport,
+    });
+    let cmds = h.take_commands();
+    let connect = cmds.iter().find(|c| c.connect.is_some()).unwrap();
+    assert_eq!(connect.connect.as_ref().unwrap().token, "t2");
+}
+
+#[test]
+fn refused_token_is_resent_when_stop_on_refused_token_is_off() {
+    let (mut h, t) = expiring_connection(false);
+    settle_refresh_getter(&mut h, "t1");
+    let id = refresh_id(&h.take_commands());
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            error: Some(proto::Error {
+                code: 109,
+                message: "token expired".into(),
+                temporary: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    h.advance(Duration::from_secs(20));
+    settle_refresh_getter(&mut h, "t1");
+    let cmds = h.take_commands();
+    let again = cmds.iter().find(|c| c.refresh.is_some());
+    assert_eq!(
+        again.unwrap().refresh.as_ref().unwrap().token,
+        "t1",
+        "retried on the backoff"
+    );
+}
+
+#[test]
+fn failed_token_getter_retries_on_a_growing_backoff_and_an_accepted_refresh_resets_it() {
+    // No ping window: the two backoffs below run past the no-ping deadline.
+    let mut h = H::new(CoreConfig {
+        has_get_token: true,
+        token: "t0".into(),
+        ..CoreConfig::default()
+    });
+    let t = h.connect_with(proto::ConnectResult {
+        expires: true,
+        ttl: 10,
+        ..Default::default()
+    });
+    h.take_events();
+    h.advance(Duration::from_secs(10));
+    let Some(Callback::ConnectionToken { flow }) = h.callbacks.pop() else {
+        panic!("refresh getter")
+    };
+    h.step(Input::TokenSettled {
+        flow,
+        result: Err(CallbackError::Other(Arc::new(std::io::Error::other(
+            "down",
+        )))),
+    });
+    let first = h.deadline(TimerKey::Refresh) - h.now;
+    assert!(
+        first >= Duration::from_secs(10) && first <= Duration::from_secs(20),
+        "{first:?}"
+    );
+
+    // A second failure in a row: the step is 1, so the delay is at most 30 s.
+    h.advance(first);
+    let Some(Callback::ConnectionToken { flow }) = h.callbacks.pop() else {
+        panic!("retried")
+    };
+    h.step(Input::TokenSettled {
+        flow,
+        result: Err(CallbackError::Other(Arc::new(std::io::Error::other(
+            "down",
+        )))),
+    });
+    let second = h.deadline(TimerKey::Refresh) - h.now;
+    assert!(second >= Duration::from_secs(10), "{second:?}");
+    assert!(second <= Duration::from_secs(30), "{second:?}");
+    assert_eq!(h.core.conn.token_failures, 2);
+
+    // The getter recovers and the server accepts the refresh.
+    h.advance(second);
+    settle_refresh_getter(&mut h, "t1");
+    let id = refresh_id(&h.take_commands());
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            refresh: Some(proto::RefreshResult {
+                expires: true,
+                ttl: 10,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(h.core.conn.token_failures, 0);
+    assert_eq!(h.core.conn.refused_token, None);
+}
+
+#[test]
+fn refresh_failure_rules_follow_the_code() {
+    use super::conn::{RefreshFailure, refresh_failure};
+    let e = |code: u32, temporary: bool| proto::Error {
+        code,
+        message: "m".into(),
+        temporary,
+        ..Default::default()
+    };
+    assert!(matches!(
+        refresh_failure(None),
+        RefreshFailure::Retry {
+            refused_expired: false
+        }
+    ));
+    assert!(matches!(
+        refresh_failure(Some(e(103, false))),
+        RefreshFailure::Keep
+    ));
+    assert!(matches!(
+        refresh_failure(Some(e(109, false))),
+        RefreshFailure::Retry {
+            refused_expired: true
+        }
+    ));
+    assert!(matches!(
+        refresh_failure(Some(e(42, false))),
+        RefreshFailure::Retry {
+            refused_expired: false
+        }
+    ));
+    assert!(matches!(
+        refresh_failure(Some(e(3500, true))),
+        RefreshFailure::Retry { .. }
+    ));
+    assert!(matches!(
+        refresh_failure(Some(e(3500, false))),
+        RefreshFailure::End(_)
+    ));
+}
+
+#[test]
+fn refresh_refused_for_identity_keeps_the_connection_without_a_retry() {
+    let (mut h, t) = expiring_connection(true);
+    settle_refresh_getter(&mut h, "t1");
+    let id = refresh_id(&h.take_commands());
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            error: Some(proto::Error {
+                code: 103,
+                message: "identity".into(),
+                temporary: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(h.core.state(), State::Connected);
+    assert!(!h.core.timers.is_armed(TimerKey::Refresh));
+    assert_eq!(h.core.conn.refused_token, None);
+}

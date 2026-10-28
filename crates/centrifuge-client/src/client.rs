@@ -37,6 +37,7 @@ use crate::shared::{CallConfig, Command, Shared, lock};
 use crate::stats::Statistics;
 use crate::stream::EventStream;
 use crate::subscription::{Subscription, SubscriptionBuilder};
+use crate::token::validate_token_retry_cap;
 use crate::transport::net::Net;
 
 /// Passed to the connection token getter. Empty for now; it may carry more
@@ -690,6 +691,8 @@ pub struct ClientBuilder {
     handlers: ClientHandlers,
     instance: Option<String>,
     max_pending_rpc: u32,
+    token_retry_cap: Duration,
+    stop_on_refused_token: bool,
 }
 
 impl std::fmt::Debug for ClientBuilder {
@@ -703,6 +706,8 @@ impl std::fmt::Debug for ClientBuilder {
             .field("event_delivery", &self.event_delivery)
             .field("instance", &self.instance.as_ref().map(|_| Redacted))
             .field("max_pending_rpc", &self.max_pending_rpc)
+            .field("token_retry_cap", &self.token_retry_cap)
+            .field("stop_on_refused_token", &self.stop_on_refused_token)
             .finish_non_exhaustive()
     }
 }
@@ -734,6 +739,8 @@ impl ClientBuilder {
             handlers: ClientHandlers::default(),
             instance: None,
             max_pending_rpc: defaults::MAX_PENDING_RPC,
+            token_retry_cap: defaults::TOKEN_RETRY_CAP,
+            stop_on_refused_token: defaults::STOP_ON_REFUSED_TOKEN,
         }
     }
 
@@ -898,6 +905,25 @@ impl ClientBuilder {
         self
     }
 
+    /// The longest delay before a failed token refresh is tried again
+    /// (default 300 s, above zero and at most 24 hours). The delay starts at
+    /// 10 to 20 s and doubles with each failure in a row, up to this value; a
+    /// success starts it again. A value of 20 s or less keeps the retry flat at
+    /// 10 to 20 s. Checked in [`build()`](Self::build).
+    pub fn token_retry_cap(mut self, cap: Duration) -> Self {
+        self.token_retry_cap = cap;
+        self
+    }
+
+    /// Whether a timer refresh that the server refused as expired (109) is not
+    /// sent again with the same token (default `true`). The connection then
+    /// runs to its expiry, and the next connect asks the token getter for a
+    /// new token. Set it to `false` to retry the same token on the backoff.
+    pub fn stop_on_refused_token(mut self, stop: bool) -> Self {
+        self.stop_on_refused_token = stop;
+        self
+    }
+
     fn endpoints(&self) -> Result<Vec<(TransportKind, Url)>, Error> {
         if self.endpoints.is_empty() {
             return Err(Error::Configuration("no transport endpoint".into()));
@@ -974,6 +1000,7 @@ impl ClientBuilder {
             instance::validate(instance)?;
         }
         validate_max_pending_rpc(self.max_pending_rpc)?;
+        validate_token_retry_cap(self.token_retry_cap)?;
         if self.min_reconnect_delay > self.max_reconnect_delay {
             return Err(Error::Configuration(
                 "min_reconnect_delay is above max_reconnect_delay".into(),
@@ -1019,6 +1046,8 @@ impl ClientBuilder {
             max_reconnect_delay: self.max_reconnect_delay,
             max_server_ping_delay: self.max_server_ping_delay,
             max_message_size: self.max_message_size,
+            token_retry_cap: self.token_retry_cap,
+            stop_on_refused_token: self.stop_on_refused_token,
             seed: random_seed(),
         });
 

@@ -768,12 +768,14 @@ Server error codes the SDK reacts to: 109 token expired, 112 unrecoverable posit
 - Each refresh belongs to the **connected session** (`conn_generation`) it was armed in. Every continuation checks that session is still current (pattern 9).
 - `get_token`:
   - `Ok(None)` or `Err(Unauthorized)`: → `disconnected(1, "unauthorized")`.
-  - `Err(Other)` (a panic in `get_token` included): `error(Refresh)`, retry after a jittered 5–10 s (centrifuge-js `backoff(0, 5000, 10000)`). The retry is never scheduled past the token's known expiry.
+  - `Err(Other)` (a panic in `get_token` included): `error(Refresh)`, retry after the token retry delay (below). The retry is not bounded by the token's expiry.
   - `Ok(Some(t))`: store `t` (so a later reconnect uses it), send `refresh`.
 - Refresh reply:
-  - Temporary error, or the command can't be written: `error(Refresh)`, retry after a jittered 5–10 s.
-  - Non-temporary error: → `disconnected(code, message)`.
-  - Success: re-arm if `expires`.
+  - Temporary error, or the command can't be written: `error(Refresh)`, retry after the token retry delay.
+  - Non-temporary error: → `disconnected(code, message)`, except 103 (identity change refused), which keeps the connection without a retry until it expires, and 109 (token expired), which is retried like a temporary error with the refused token remembered.
+  - Success: re-arm if `expires`, and restart the failure count and forget the refused token.
+- **Token retry delay** (Swift `RefreshPolicy.swift`, Java `Options.tokenRetryCap`): the retry after `n` consecutive failures waits `min(ceiling, 10 s + uniform(0, min(ceiling, 10 s * 2^n)))`, where `ceiling = max(20 s, min(token_retry_cap, 20 s * 2^n))`. The first retry is 10 to 20 s, the delay doubles up to `token_retry_cap` (default 300 s, above zero, at most 24 hours), and a cap of 20 s or less keeps it flat. The failure count restarts on each connect and each accepted refresh.
+- **Refused token** (`stop_on_refused_token`, default true): a timer fetch that returns the token the server refused as expired (109) is not sent again. No retry is armed, the next connect asks `get_token` for a token, and the connection runs to its expiry. With `stop_on_refused_token(false)` the same token is retried on the backoff.
 - The SDK keeps the token's expiry as wall-clock time (`SystemTime`). A reconnect that starts after it has passed sets `refresh_required`, so the stale token isn't tried first after an outage or a laptop sleep.
 - **`refresh` push** (server API `refresh`). It adjusts only a refresh schedule the client already runs, within the current `conn_generation`:
   - If the connection is in **client-side refresh** (the connect or last refresh reply had `expires: true`): with `expires: true`, re-arm the refresh timer for the new `ttl`. With `expires: false`, cancel it, because the connection no longer expires.

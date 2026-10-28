@@ -128,6 +128,29 @@ pub(crate) fn backoff(rng: &mut Rng, attempt: u32, min: Duration, max: Duration)
         .min(max)
 }
 
+/// The shortest delay of a retry of a failed token refresh.
+pub(crate) const TOKEN_RETRY_MINIMUM: Duration = Duration::from_secs(10);
+
+/// The ceiling of the first token refresh retry. It doubles with each failure
+/// in a row, up to the token retry cap.
+pub(crate) const TOKEN_RETRY_FIRST_CEILING: Duration = Duration::from_secs(20);
+
+/// The delay of the retry after `step` consecutive failed token refreshes
+/// (docs/spec.md §6.6), the shape of the Swift and Java SDKs.
+///
+/// The ceiling is `max(20 s, min(cap, 20 s * 2^step))`, and the delay is
+/// `min(ceiling, 10 s + uniform(0, min(ceiling, 10 s * 2^step)))`. The first
+/// retry is therefore 10 to 20 s, and a cap at or below 20 s keeps every
+/// retry flat in that range. The delay never depends on the token's expiry.
+pub(crate) fn token_retry_delay(rng: &mut Rng, step: u32, cap: Duration) -> Duration {
+    let factor: u32 = 1 << step.min(16);
+    let scaled_ceiling = TOKEN_RETRY_FIRST_CEILING.checked_mul(factor).unwrap_or(cap);
+    let ceiling = TOKEN_RETRY_FIRST_CEILING.max(cap.min(scaled_ceiling));
+    let scaled_jitter = TOKEN_RETRY_MINIMUM.checked_mul(factor).unwrap_or(ceiling);
+    let jitter = rng.between(Duration::ZERO, ceiling.min(scaled_jitter));
+    ceiling.min(TOKEN_RETRY_MINIMUM.saturating_add(jitter))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +188,64 @@ mod tests {
         assert!(first >= min && first <= min * 2, "{first:?}");
         let late: Vec<Duration> = (0..50).map(|_| backoff(&mut rng, 10, min, max)).collect();
         assert!(late.iter().any(|d| *d > Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn token_retry_first_retry_is_ten_to_twenty_seconds() {
+        let mut rng = Rng::new(7);
+        for _ in 0..500 {
+            let d = token_retry_delay(&mut rng, 0, Duration::from_secs(300));
+            assert!(
+                d >= Duration::from_secs(10) && d <= Duration::from_secs(20),
+                "{d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn token_retry_doubles_up_to_the_cap() {
+        let mut rng = Rng::new(11);
+        let cap = Duration::from_secs(300);
+        let mut max_seen = [Duration::ZERO; 6];
+        for step in 0_u32..6 {
+            for _ in 0..500 {
+                let d = token_retry_delay(&mut rng, step, cap);
+                assert!(
+                    d >= Duration::from_secs(10) && d <= cap,
+                    "step {step}: {d:?}"
+                );
+                let seen = &mut max_seen[step as usize];
+                *seen = (*seen).max(d);
+            }
+        }
+        // The range of step n is 10 s to 10 s + 10 s * 2^n (bounded by the ceiling).
+        assert!(max_seen[1] <= Duration::from_secs(30), "{:?}", max_seen[1]);
+        assert!(max_seen[2] <= Duration::from_secs(50), "{:?}", max_seen[2]);
+        assert!(max_seen[2] > Duration::from_secs(30), "{:?}", max_seen[2]);
+        assert!(max_seen[5] > Duration::from_secs(120), "{:?}", max_seen[5]);
+    }
+
+    #[test]
+    fn token_retry_cap_at_or_below_twenty_seconds_keeps_the_flat_retry() {
+        let mut rng = Rng::new(3);
+        for step in [0_u32, 1, 4, 30, u32::MAX] {
+            for _ in 0..200 {
+                let d = token_retry_delay(&mut rng, step, Duration::from_secs(5));
+                assert!(
+                    d >= Duration::from_secs(10) && d <= Duration::from_secs(20),
+                    "step {step}: {d:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn token_retry_huge_step_does_not_overflow() {
+        let mut rng = Rng::new(5);
+        let cap = Duration::from_secs(24 * 3600);
+        for _ in 0..200 {
+            let d = token_retry_delay(&mut rng, u32::MAX, cap);
+            assert!(d >= Duration::from_secs(10) && d <= cap, "{d:?}");
+        }
     }
 }
