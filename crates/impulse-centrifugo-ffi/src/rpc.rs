@@ -279,7 +279,7 @@ impl Completion {
 /// The status of a failed call: the server's code for a server error, the client
 /// code of the failure otherwise. Subscription and deadlock errors cannot come
 /// from a call and map to the configuration code.
-fn status_of(error: &Error) -> i32 {
+pub(crate) fn status_of(error: &Error) -> i32 {
     match error {
         Error::Server(server) => i32::try_from(server.code).unwrap_or(i32::MAX),
         Error::ConnectionClosed => ImpulseCentrifugoStatus::ConnectionClosed as i32,
@@ -346,7 +346,10 @@ fn to_usize(value: u32) -> usize {
 /// # Safety
 ///
 /// When `len` is non-zero, `data` must point to `len` readable bytes.
-unsafe fn copy_bytes(data: *const u8, len: usize) -> Result<Bytes, ImpulseCentrifugoStatus> {
+pub(crate) unsafe fn copy_bytes(
+    data: *const u8,
+    len: usize,
+) -> Result<Bytes, ImpulseCentrifugoStatus> {
     if len == 0 {
         return Ok(Bytes::new());
     }

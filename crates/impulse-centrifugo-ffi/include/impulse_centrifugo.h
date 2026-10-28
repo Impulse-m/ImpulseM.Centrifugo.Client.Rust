@@ -32,7 +32,9 @@ enum impulse_centrifugo_event_kind
    */
   IMPULSE_CENTRIFUGO_EVENT_KIND_DISCONNECTED = 2,
   /**
-   * A publication in a server-side subscription. `channel` and `data` are set.
+   * A publication. On the client callback it comes from a server-side
+   * subscription; on a subscription callback it comes from that subscription.
+   * `channel`, `data` and `offset` are set.
    */
   IMPULSE_CENTRIFUGO_EVENT_KIND_PUBLICATION = 3,
   /**
@@ -41,12 +43,60 @@ enum impulse_centrifugo_event_kind
    * panic, 0 other) and `text` is the message.
    */
   IMPULSE_CENTRIFUGO_EVENT_KIND_ERROR = 4,
+  /**
+   * A subscription started subscribing or resubscribing. `code` and `text` are
+   * the code and reason; `channel` is set.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_SUBSCRIBING = 5,
+  /**
+   * A subscription is subscribed. `code` holds the flags of the subscribed
+   * event: positioned 1, recoverable 2, was recovering 4, recovered 8, stream
+   * position 16. With the stream position flag, `offset` is its offset and
+   * `text` its epoch. `channel` is set.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_SUBSCRIBED = 6,
+  /**
+   * A subscription is unsubscribed and will not resubscribe by itself. `code`
+   * and `text` are the code and reason; `channel` is set.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_UNSUBSCRIBED = 7,
+  /**
+   * A background subscription error. `code` is the error kind (1 subscribe, 2
+   * token, 3 get state, 4 refresh, 5 configuration, 0 other) and `text` is the
+   * message; `channel` is set.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_SUBSCRIPTION_ERROR = 8,
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
 typedef enum impulse_centrifugo_event_kind impulse_centrifugo_event_kind;
 #else
 typedef int32_t impulse_centrifugo_event_kind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What a token request asks for.
+ */
+enum impulse_centrifugo_token_kind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The connection token. `channel` is null.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_KIND_CONNECTION = 1,
+  /**
+   * The token of the subscription named by `channel`.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_KIND_SUBSCRIPTION = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum impulse_centrifugo_token_kind impulse_centrifugo_token_kind;
+#else
+typedef int32_t impulse_centrifugo_token_kind;
 #endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
@@ -131,6 +181,41 @@ enum impulse_centrifugo_status
 typedef enum impulse_centrifugo_status impulse_centrifugo_status;
 #else
 typedef int32_t impulse_centrifugo_status;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * How a token request is answered, as the `outcome` of
+ * `impulse_centrifugo_token_resolve`.
+ */
+enum impulse_centrifugo_token_outcome
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * Use the token the answer carries. The token must be non-null.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_OUTCOME_TOKEN = 1,
+  /**
+   * No token: the connection goes on anonymously.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_OUTCOME_ANONYMOUS = 2,
+  /**
+   * The user is not allowed: the client or the subscription stops.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_OUTCOME_UNAUTHORIZED = 3,
+  /**
+   * A failure to retry with backoff. The answer's text, when non-null, is the
+   * message of the error.
+   */
+  IMPULSE_CENTRIFUGO_TOKEN_OUTCOME_FAILED = 4,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum impulse_centrifugo_token_outcome impulse_centrifugo_token_outcome;
+#else
+typedef int32_t impulse_centrifugo_token_outcome;
 #endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
@@ -224,8 +309,8 @@ typedef struct impulse_centrifugo_config_t {
 } impulse_centrifugo_config_t;
 
 /**
- * One client event. Every pointer is borrowed for the duration of the callback
- * only; copy what is kept. Fields that a kind does not use are empty or null.
+ * One event. Every pointer is borrowed for the duration of the callback only;
+ * copy what is kept. Fields that a kind does not use are empty, zero or null.
  */
 typedef struct impulse_centrifugo_event_t {
   /**
@@ -233,11 +318,11 @@ typedef struct impulse_centrifugo_event_t {
    */
   impulse_centrifugo_event_kind kind;
   /**
-   * The disconnect code or the error kind, zero otherwise.
+   * The disconnect code, the error kind or the subscribed flags, zero otherwise.
    */
   uint32_t code;
   /**
-   * The client id, the disconnect reason or the error message.
+   * The client id, the disconnect reason, the error message or the epoch.
    */
   const char *text;
   /**
@@ -245,7 +330,7 @@ typedef struct impulse_centrifugo_event_t {
    */
   uintptr_t text_len;
   /**
-   * The channel of a publication, or null.
+   * The channel of a publication or a subscription event, or null.
    */
   const char *channel;
   /**
@@ -260,6 +345,11 @@ typedef struct impulse_centrifugo_event_t {
    * Length of `data` in bytes.
    */
   uintptr_t data_len;
+  /**
+   * The offset of a publication, or the stream offset of a subscribed event
+   * with the stream position flag. Zero otherwise.
+   */
+  uint64_t offset;
 } impulse_centrifugo_event_t;
 
 /**
@@ -434,6 +524,86 @@ typedef struct impulse_centrifugo_pool_config_t {
 } impulse_centrifugo_pool_config_t;
 
 /**
+ * One subscription request of `impulse_centrifugo_subscribe`. Everything is copied
+ * before the call returns. The subscription is registered under its channel and
+ * starts subscribing at once; a second request for the same channel fails.
+ */
+typedef struct impulse_centrifugo_subscribe_request_t {
+  /**
+   * The channel, NUL-terminated. Required.
+   */
+  const char *channel;
+  /**
+   * The subscribe data; may be null when `data_len` is zero.
+   */
+  const uint8_t *data;
+  /**
+   * Length of `data` in bytes.
+   */
+  uintptr_t data_len;
+  /**
+   * Non-zero asks for a positioned subscription: offsets are checked and gaps
+   * are detected.
+   */
+  uint8_t positioned;
+  /**
+   * Non-zero asks for a recoverable subscription: missed publications are
+   * recovered on resubscribe.
+   */
+  uint8_t recoverable;
+  /**
+   * Non-zero asks for fossil delta compression of publications.
+   */
+  uint8_t delta_fossil;
+  /**
+   * Non-zero takes the subscription token from the client's token callback, with
+   * the channel as the request's channel. Zero subscribes without a token.
+   */
+  uint8_t token_callback;
+  /**
+   * The stream epoch to recover from on the first subscribe, with `since_offset`
+   * as its offset; null when there is none.
+   */
+  const char *since_epoch;
+  /**
+   * Offset of `since_epoch`.
+   */
+  uint64_t since_offset;
+  /**
+   * Callback of the subscription events, or null for none.
+   */
+  void (*on_event)(void *user, const struct impulse_centrifugo_event_t *event);
+  /**
+   * Passed back to `on_event`.
+   */
+  void *user;
+} impulse_centrifugo_subscribe_request_t;
+
+/**
+ * One token request, passed to the token callback. It is borrowed for the call
+ * only: the callback copies what it keeps and answers with
+ * `impulse_centrifugo_token_resolve` and `request_id`.
+ */
+typedef struct impulse_centrifugo_token_request_t {
+  /**
+   * Names the request in `impulse_centrifugo_token_resolve`.
+   */
+  uint64_t request_id;
+  /**
+   * The token the request is for.
+   */
+  impulse_centrifugo_token_kind kind;
+  /**
+   * The channel of a subscription token, or null for the connection token.
+   */
+  const char *channel;
+  /**
+   * Length of `channel` in bytes.
+   */
+  uintptr_t channel_len;
+} impulse_centrifugo_token_request_t;
+
+/**
  * Called once with the outcome of a call. `user` is the pointer given with the
  * request.
  */
@@ -441,7 +611,7 @@ typedef void (*impulse_centrifugo_completion_fn)(void *user,
                                                  const struct impulse_centrifugo_result_t *result);
 
 /**
- * Called for every client event. `user` is the pointer given with the callback.
+ * Called for every event. `user` is the pointer given with the callback.
  */
 typedef void (*impulse_centrifugo_event_fn)(void *user,
                                             const struct impulse_centrifugo_event_t *event);
@@ -618,6 +788,67 @@ int32_t impulse_centrifugo_publish(const struct impulse_centrifugo_client_t *cli
                                    void (*on_done)(void *user,
                                                    const struct impulse_centrifugo_result_t *result),
                                    void *user);
+
+/**
+ * Registers a subscription on the client and starts it. Its events go to
+ * `on_event`, and its token to the client's token callback when `token_callback`
+ * is set.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`.
+ * `request` must be readable, with the pointers its documentation names valid
+ * for the call. `on_event`'s `user` must stay valid until the subscription is
+ * removed with `impulse_centrifugo_unsubscribe` or the client is destroyed.
+ */
+int32_t impulse_centrifugo_subscribe(const struct impulse_centrifugo_client_t *client,
+                                     const struct impulse_centrifugo_subscribe_request_t *request);
+
+/**
+ * Unsubscribes the subscription on `channel` and removes it from the client. Its
+ * event callback runs no more after the removal. An unknown channel does nothing.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`, and
+ * `channel` must be a NUL-terminated string valid for the call.
+ */
+int32_t impulse_centrifugo_unsubscribe(const struct impulse_centrifugo_client_t *client,
+                                       const char *channel);
+
+/**
+ * Sets the callback that answers token requests of the client: the connection
+ * token and, for subscriptions created with `token_callback`, their tokens. It
+ * replaces the callback set before; null clears it. Without a callback, the
+ * connection goes on anonymously and a subscription retries with backoff. Set it
+ * before the first connect, because the first token is requested then.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`.
+ * `callback` must be null or a function that stays callable, and `user` must stay
+ * valid, until the callback is replaced or the client is destroyed.
+ */
+int32_t impulse_centrifugo_client_set_token_callback(const struct impulse_centrifugo_client_t *client,
+                                                     void (*callback)(void *user,
+                                                                      const struct impulse_centrifugo_token_request_t *request),
+                                                     void *user);
+
+/**
+ * Answers the token request `request_id` of the client's token callback. `outcome`
+ * is an `ImpulseCentrifugoTokenOutcome` value; with `Token` the token is in
+ * `token`, and with `Failed` `token` is an optional message. Any thread may call
+ * it, once per request; a late or unknown answer does nothing.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`. A
+ * non-null `token` must be a NUL-terminated string valid for the call.
+ */
+int32_t impulse_centrifugo_token_resolve(const struct impulse_centrifugo_client_t *client,
+                                         uint64_t request_id,
+                                         int32_t outcome,
+                                         const char *token);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -1,13 +1,31 @@
-//! Client events over the C ABI: connect, disconnect, background errors and
-//! server-side publications, delivered to one callback per client.
+//! Events over the C ABI: the client events (connect, disconnect, background
+//! errors and server-side publications), delivered to one callback per client,
+//! and the subscription events, delivered to the callback of their subscription.
 
 use std::ffi::{c_char, c_void};
 
 use centrifuge::{
     Client, ClientErrorKind, ConnectedEvent, DisconnectedEvent, ErrorEvent, ServerPublicationEvent,
+    SubscribedEvent, SubscriptionErrorKind,
 };
 
 use crate::{ImpulseCentrifugoClient, ImpulseCentrifugoStatus, UserData, guarded, status};
+
+/// Bit of `code` in a subscribed event: the subscription is positioned.
+pub(crate) const SUBSCRIBED_POSITIONED: u32 = 1;
+
+/// Bit of `code` in a subscribed event: the subscription is recoverable.
+pub(crate) const SUBSCRIBED_RECOVERABLE: u32 = 2;
+
+/// Bit of `code` in a subscribed event: a recovery was attempted.
+pub(crate) const SUBSCRIBED_WAS_RECOVERING: u32 = 4;
+
+/// Bit of `code` in a subscribed event: every missed publication was recovered.
+pub(crate) const SUBSCRIBED_RECOVERED: u32 = 8;
+
+/// Bit of `code` in a subscribed event: `offset` and `text` carry the stream
+/// position the server replied with.
+pub(crate) const SUBSCRIBED_HAS_POSITION: u32 = 16;
 
 /// Kinds of [`ImpulseCentrifugoEvent`].
 #[repr(i32)]
@@ -18,28 +36,45 @@ pub enum ImpulseCentrifugoEventKind {
     /// The client disconnected and will not reconnect by itself. `code` and
     /// `text` are the disconnect code and reason.
     Disconnected = 2,
-    /// A publication in a server-side subscription. `channel` and `data` are set.
+    /// A publication. On the client callback it comes from a server-side
+    /// subscription; on a subscription callback it comes from that subscription.
+    /// `channel`, `data` and `offset` are set.
     Publication = 3,
     /// A background client error. `code` is the error kind (1 transport, 2 connect
     /// token, 3 connect, 4 refresh, 5 configuration, 6 protocol, 7 delta, 8 handler
     /// panic, 0 other) and `text` is the message.
     Error = 4,
+    /// A subscription started subscribing or resubscribing. `code` and `text` are
+    /// the code and reason; `channel` is set.
+    Subscribing = 5,
+    /// A subscription is subscribed. `code` holds the flags of the subscribed
+    /// event: positioned 1, recoverable 2, was recovering 4, recovered 8, stream
+    /// position 16. With the stream position flag, `offset` is its offset and
+    /// `text` its epoch. `channel` is set.
+    Subscribed = 6,
+    /// A subscription is unsubscribed and will not resubscribe by itself. `code`
+    /// and `text` are the code and reason; `channel` is set.
+    Unsubscribed = 7,
+    /// A background subscription error. `code` is the error kind (1 subscribe, 2
+    /// token, 3 get state, 4 refresh, 5 configuration, 0 other) and `text` is the
+    /// message; `channel` is set.
+    SubscriptionError = 8,
 }
 
-/// One client event. Every pointer is borrowed for the duration of the callback
-/// only; copy what is kept. Fields that a kind does not use are empty or null.
+/// One event. Every pointer is borrowed for the duration of the callback only;
+/// copy what is kept. Fields that a kind does not use are empty, zero or null.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ImpulseCentrifugoEvent {
     /// What happened.
     pub kind: ImpulseCentrifugoEventKind,
-    /// The disconnect code or the error kind, zero otherwise.
+    /// The disconnect code, the error kind or the subscribed flags, zero otherwise.
     pub code: u32,
-    /// The client id, the disconnect reason or the error message.
+    /// The client id, the disconnect reason, the error message or the epoch.
     pub text: *const c_char,
     /// Length of `text` in bytes.
     pub text_len: usize,
-    /// The channel of a publication, or null.
+    /// The channel of a publication or a subscription event, or null.
     pub channel: *const c_char,
     /// Length of `channel` in bytes.
     pub channel_len: usize,
@@ -47,46 +82,68 @@ pub struct ImpulseCentrifugoEvent {
     pub data: *const u8,
     /// Length of `data` in bytes.
     pub data_len: usize,
+    /// The offset of a publication, or the stream offset of a subscribed event
+    /// with the stream position flag. Zero otherwise.
+    pub offset: u64,
 }
 
-/// Called for every client event. `user` is the pointer given with the callback.
+/// Called for every event. `user` is the pointer given with the callback.
 pub type ImpulseCentrifugoEventCallback =
     unsafe extern "C" fn(user: *mut c_void, event: *const ImpulseCentrifugoEvent);
 
-/// The callback of one client, with its user pointer.
+/// The callback of one client or one subscription, with its user pointer.
 #[derive(Debug, Clone, Copy)]
-struct EventSink {
+pub(crate) struct EventSink {
     callback: ImpulseCentrifugoEventCallback,
     user: UserData,
 }
 
 impl EventSink {
+    /// A sink for `callback` with its user pointer.
+    pub(crate) fn new(callback: ImpulseCentrifugoEventCallback, user: *mut c_void) -> Self {
+        Self {
+            callback,
+            user: UserData(user),
+        }
+    }
+
     /// Delivers `event` to the callback.
-    fn emit(self, event: &ImpulseCentrifugoEvent) {
-        // SAFETY: the caller of `impulse_centrifugo_client_set_event_callback` promised
-        // that `user` stays valid for as long as the client lives, and the event is
-        // valid for the call.
+    pub(crate) fn emit(self, event: &ImpulseCentrifugoEvent) {
+        // SAFETY: the caller of the function that set this sink promised that `user`
+        // stays valid for as long as the client or subscription lives, and the event
+        // is valid for the call.
         unsafe { (self.callback)(self.user.0, event) };
     }
 }
 
+/// The borrowed fields of an event, copied into the event by `event_of`.
+pub(crate) struct EventFields<'text> {
+    /// The event kind.
+    pub(crate) kind: ImpulseCentrifugoEventKind,
+    /// The code of the event.
+    pub(crate) code: u32,
+    /// The text of the event.
+    pub(crate) text: &'text str,
+    /// The channel of the event, empty when it has none.
+    pub(crate) channel: &'text str,
+    /// The payload of the event, empty when it has none.
+    pub(crate) data: &'text [u8],
+    /// The offset of the event, zero when it has none.
+    pub(crate) offset: u64,
+}
+
 /// Builds an event from its borrowed fields.
-fn event_of(
-    kind: ImpulseCentrifugoEventKind,
-    code: u32,
-    text: &str,
-    channel: &str,
-    data: &[u8],
-) -> ImpulseCentrifugoEvent {
+pub(crate) fn event_of(fields: &EventFields<'_>) -> ImpulseCentrifugoEvent {
     ImpulseCentrifugoEvent {
-        kind,
-        code,
-        text: text.as_ptr().cast::<c_char>(),
-        text_len: text.len(),
-        channel: channel.as_ptr().cast::<c_char>(),
-        channel_len: channel.len(),
-        data: data.as_ptr(),
-        data_len: data.len(),
+        kind: fields.kind,
+        code: fields.code,
+        text: fields.text.as_ptr().cast::<c_char>(),
+        text_len: fields.text.len(),
+        channel: fields.channel.as_ptr().cast::<c_char>(),
+        channel_len: fields.channel.len(),
+        data: fields.data.as_ptr(),
+        data_len: fields.data.len(),
+        offset: fields.offset,
     }
 }
 
@@ -103,6 +160,39 @@ fn error_kind_code(kind: &ClientErrorKind) -> u32 {
         ClientErrorKind::HandlerPanicked => 8,
         _ => 0,
     }
+}
+
+/// The number the event reports for a background subscription error kind.
+pub(crate) fn subscription_error_code(kind: &SubscriptionErrorKind) -> u32 {
+    match kind {
+        SubscriptionErrorKind::Subscribe => 1,
+        SubscriptionErrorKind::Token => 2,
+        SubscriptionErrorKind::GetState => 3,
+        SubscriptionErrorKind::Refresh => 4,
+        SubscriptionErrorKind::Configuration => 5,
+        _ => 0,
+    }
+}
+
+/// The flags of a subscribed event, as the `code` of the event reports them.
+pub(crate) fn subscribed_flags(event: &SubscribedEvent) -> u32 {
+    let mut flags: u32 = 0;
+    if event.positioned {
+        flags |= SUBSCRIBED_POSITIONED;
+    }
+    if event.recoverable {
+        flags |= SUBSCRIBED_RECOVERABLE;
+    }
+    if event.was_recovering {
+        flags |= SUBSCRIBED_WAS_RECOVERING;
+    }
+    if event.recovered {
+        flags |= SUBSCRIBED_RECOVERED;
+    }
+    if event.stream_position.is_some() {
+        flags |= SUBSCRIBED_HAS_POSITION;
+    }
+    flags
 }
 
 /// Sets the callback that receives the events of the client. It replaces the one
@@ -128,53 +218,54 @@ pub unsafe extern "C" fn impulse_centrifugo_client_set_event_callback(
         let Some(callback): Option<ImpulseCentrifugoEventCallback> = callback else {
             return status(ImpulseCentrifugoStatus::InvalidArgument);
         };
-        let sink: EventSink = EventSink {
-            callback,
-            user: UserData(user),
-        };
+        let sink: EventSink = EventSink::new(callback, user);
         handle
             .client
             .on_connected(move |_: &Client, event: ConnectedEvent| {
-                sink.emit(&event_of(
-                    ImpulseCentrifugoEventKind::Connected,
-                    0,
-                    &event.client_id,
-                    "",
-                    &[],
-                ));
+                sink.emit(&event_of(&EventFields {
+                    kind: ImpulseCentrifugoEventKind::Connected,
+                    code: 0,
+                    text: &event.client_id,
+                    channel: "",
+                    data: &[],
+                    offset: 0,
+                }));
             });
         handle
             .client
             .on_disconnected(move |_: &Client, event: DisconnectedEvent| {
-                sink.emit(&event_of(
-                    ImpulseCentrifugoEventKind::Disconnected,
-                    event.code,
-                    &event.reason,
-                    "",
-                    &[],
-                ));
+                sink.emit(&event_of(&EventFields {
+                    kind: ImpulseCentrifugoEventKind::Disconnected,
+                    code: event.code,
+                    text: &event.reason,
+                    channel: "",
+                    data: &[],
+                    offset: 0,
+                }));
             });
         handle
             .client
             .on_error(move |_: &Client, event: ErrorEvent| {
-                sink.emit(&event_of(
-                    ImpulseCentrifugoEventKind::Error,
-                    error_kind_code(&event.error.kind),
-                    &event.error.message,
-                    "",
-                    &[],
-                ));
+                sink.emit(&event_of(&EventFields {
+                    kind: ImpulseCentrifugoEventKind::Error,
+                    code: error_kind_code(&event.error.kind),
+                    text: &event.error.message,
+                    channel: "",
+                    data: &[],
+                    offset: 0,
+                }));
             });
         handle
             .client
             .on_publication(move |_: &Client, event: ServerPublicationEvent| {
-                sink.emit(&event_of(
-                    ImpulseCentrifugoEventKind::Publication,
-                    0,
-                    "",
-                    &event.channel,
-                    &event.publication.data,
-                ));
+                sink.emit(&event_of(&EventFields {
+                    kind: ImpulseCentrifugoEventKind::Publication,
+                    code: 0,
+                    text: "",
+                    channel: &event.channel,
+                    data: &event.publication.data,
+                    offset: event.publication.offset,
+                }));
             });
         status(ImpulseCentrifugoStatus::Ok)
     })

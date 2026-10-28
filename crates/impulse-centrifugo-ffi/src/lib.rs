@@ -17,13 +17,15 @@ use std::ptr;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use centrifuge::{Client, ClientBuilder, ProxyConfig};
+use centrifuge::{Client, ClientBuilder, ConnectionTokenContext, ProxyConfig};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use tokio::runtime::{Builder, Handle, Runtime};
 use url::Url;
 
 mod events;
 mod rpc;
+mod subscribe;
+mod token_cb;
 
 pub use events::{
     ImpulseCentrifugoEvent, ImpulseCentrifugoEventCallback, ImpulseCentrifugoEventKind,
@@ -36,6 +38,15 @@ pub use rpc::{
     impulse_centrifugo_pool_create, impulse_centrifugo_pool_destroy, impulse_centrifugo_pool_rpc,
     impulse_centrifugo_pool_rpc_cancel, impulse_centrifugo_publish, impulse_centrifugo_rpc,
     impulse_centrifugo_rpc_cancel,
+};
+pub use subscribe::{
+    ImpulseCentrifugoSubscribeRequest, impulse_centrifugo_subscribe, impulse_centrifugo_unsubscribe,
+};
+use token_cb::TokenBridge;
+pub use token_cb::{
+    ImpulseCentrifugoTokenCallback, ImpulseCentrifugoTokenKind, ImpulseCentrifugoTokenOutcome,
+    ImpulseCentrifugoTokenRequest, impulse_centrifugo_client_set_token_callback,
+    impulse_centrifugo_token_resolve,
 };
 
 /// Version of this C ABI. Bumped when a signature, a struct layout or a status
@@ -164,6 +175,8 @@ pub struct ImpulseCentrifugoClient {
     /// The call registries of the pools built on this client, so that destroy
     /// waits for the calls of pools that were destroyed before it.
     pool_calls: Mutex<Vec<Weak<CallRegistry>>>,
+    /// The token callback of the client and the requests waiting for it.
+    tokens: Arc<TokenBridge>,
 }
 
 /// A caller's user pointer, moved to the runtime threads that run its callback.
@@ -294,12 +307,15 @@ unsafe fn build_client(
         .build()
         .map_err(|_| ImpulseCentrifugoStatus::NotInitialized)?;
 
+    let command_timeout: Duration = millis_or(config.timeout_ms, DEFAULT_TIMEOUT_MS);
+    let tokens: Arc<TokenBridge> = Arc::new(TokenBridge::new(command_timeout));
+    let connection_tokens: Arc<TokenBridge> = Arc::clone(&tokens);
     let mut builder: ClientBuilder = Client::builder(endpoint)
         .runtime(Handle::clone(runtime.handle()))
         .websocket_subprotocol(config.websocket_subprotocol != 0)
         .http_headers(headers)
         .proxy(proxy)
-        .timeout(millis_or(config.timeout_ms, DEFAULT_TIMEOUT_MS))
+        .timeout(command_timeout)
         .min_reconnect_delay(millis_or(config.min_reconnect_ms, DEFAULT_MIN_RECONNECT_MS))
         .max_reconnect_delay(millis_or(config.max_reconnect_ms, DEFAULT_MAX_RECONNECT_MS))
         .max_server_ping_delay(millis_or(
@@ -310,6 +326,10 @@ unsafe fn build_client(
             DEFAULT_MAX_PENDING_RPC
         } else {
             config.max_pending_rpc
+        })
+        .get_token(move |_context: ConnectionTokenContext| {
+            let bridge: Arc<TokenBridge> = Arc::clone(&connection_tokens);
+            async move { bridge.connection_token().await }
         });
     if let Some(value) = instance {
         builder = builder.instance(value);
@@ -326,6 +346,7 @@ unsafe fn build_client(
         client,
         calls: Arc::new(CallRegistry::default()),
         pool_calls: Mutex::new(Vec::new()),
+        tokens,
     })
 }
 
@@ -446,6 +467,7 @@ pub unsafe extern "C" fn impulse_centrifugo_client_destroy(
             client,
             calls,
             pool_calls,
+            ..
         }: ImpulseCentrifugoClient = *handle;
         let closing: Pin<Box<dyn Future<Output = ()> + Send + 'static>> = Box::pin(client.close());
         if Handle::try_current().is_ok() {

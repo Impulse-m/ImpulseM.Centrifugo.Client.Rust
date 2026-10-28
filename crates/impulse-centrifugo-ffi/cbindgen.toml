@@ -13,6 +13,7 @@ include = [
     "ImpulseCentrifugoStatus",
     "ImpulseCentrifugoCompletion",
     "ImpulseCentrifugoEventCallback",
+    "ImpulseCentrifugoTokenOutcome",
 ]
 
 [export.rename]
@@ -29,6 +30,11 @@ include = [
 "ImpulseCentrifugoEventKind" = "impulse_centrifugo_event_kind"
 "ImpulseCentrifugoEvent" = "impulse_centrifugo_event_t"
 "ImpulseCentrifugoEventCallback" = "impulse_centrifugo_event_fn"
+"ImpulseCentrifugoSubscribeRequest" = "impulse_centrifugo_subscribe_request_t"
+"ImpulseCentrifugoTokenKind" = "impulse_centrifugo_token_kind"
+"ImpulseCentrifugoTokenOutcome" = "impulse_centrifugo_token_outcome"
+"ImpulseCentrifugoTokenRequest" = "impulse_centrifugo_token_request_t"
+"ImpulseCentrifugoTokenCallback" = "impulse_centrifugo_token_fn"
 
 [enum]
 prefix_with_name = true
