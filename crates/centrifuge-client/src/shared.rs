@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, watch};
 use crate::calls::CallTable;
 use crate::dispatch::{ClientHandlers, StreamSlot, SubHandlers};
 use crate::events::{ClientEvent, PublicationEvent, SubscriptionEvent};
+use crate::rpc_tracker::RpcTracker;
 use crate::transport::WriterTx;
 
 /// Locks a mutex, recovering from poisoning (a panicking handler must never
@@ -29,6 +30,8 @@ pub(crate) struct SessionHandle {
     pub(crate) writer: WriterTx,
     pub(crate) session: String,
     pub(crate) node: String,
+    /// The server confirmed the RPC options on this connection.
+    pub(crate) rpc_options: bool,
 }
 
 /// What the driver publishes after each step.
@@ -119,6 +122,10 @@ impl std::fmt::Debug for SubInner {
 pub(crate) struct CallConfig {
     pub(crate) protocol: Protocol,
     pub(crate) timeout: std::time::Duration,
+    /// The client has an instance: its rpc calls count against `max_pending_rpc`
+    /// and can be tracked.
+    pub(crate) has_instance: bool,
+    pub(crate) max_pending_rpc: u32,
 }
 
 pub(crate) struct Shared {
@@ -131,6 +138,7 @@ pub(crate) struct Shared {
     pub(crate) by_key: Mutex<HashMap<SubKey, Arc<SubInner>>>,
     pub(crate) next_key: AtomicU64,
     pub(crate) calls: Mutex<CallTable>,
+    pub(crate) rpc: RpcTracker,
     pub(crate) next_call_id: AtomicU32,
     pub(crate) handlers: Mutex<ClientHandlers>,
     pub(crate) events_stream: Mutex<StreamSlot<ClientEvent>>,
@@ -171,6 +179,7 @@ impl Shared {
         http_headers: http::HeaderMap,
         net: Arc<crate::transport::net::Net>,
     ) -> Self {
+        let rpc: RpcTracker = RpcTracker::new(cfg.has_instance, cfg.max_pending_rpc);
         Self {
             id: CLIENT_IDS.fetch_add(1, Ordering::Relaxed),
             commands,
@@ -181,6 +190,7 @@ impl Shared {
             by_key: Mutex::new(HashMap::new()),
             next_key: AtomicU64::new(1),
             calls: Mutex::new(CallTable::default()),
+            rpc,
             next_call_id: AtomicU32::new(CALL_ID_BASE),
             handlers: Mutex::new(ClientHandlers::default()),
             events_stream: Mutex::new(StreamSlot::default()),

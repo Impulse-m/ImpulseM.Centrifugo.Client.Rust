@@ -19,29 +19,53 @@ use crate::transport::WriteReq;
 
 type ReplyTx = oneshot::Sender<Result<proto::Reply, Error>>;
 
+/// A call waiting for its reply.
+struct CallEntry {
+    transport: TransportId,
+    /// The error the call fails with when its connection is lost.
+    on_loss: Error,
+    tx: ReplyTx,
+}
+
 /// Calls waiting for a reply, by command id.
 #[derive(Default)]
 pub(crate) struct CallTable {
-    calls: HashMap<u32, (TransportId, ReplyTx)>,
+    calls: HashMap<u32, CallEntry>,
     /// Transports torn down: inserting for them is refused, so no call is left
     /// behind after a sweep.
     closed: HashSet<TransportId>,
 }
 
 impl CallTable {
-    fn insert(&mut self, id: u32, transport: TransportId, tx: ReplyTx) -> Result<(), ReplyTx> {
+    /// Registers a call on `transport`. `on_loss` is the error the call fails
+    /// with when that connection is lost. A refused insert gives the reply
+    /// sender back.
+    pub(crate) fn insert(
+        &mut self,
+        id: u32,
+        transport: TransportId,
+        on_loss: Error,
+        tx: ReplyTx,
+    ) -> Result<(), ReplyTx> {
         if self.closed.contains(&transport) {
             return Err(tx);
         }
-        self.calls.insert(id, (transport, tx));
+        self.calls.insert(
+            id,
+            CallEntry {
+                transport,
+                on_loss,
+                tx,
+            },
+        );
         Ok(())
     }
 
     /// Resolves a reply; `false` if nobody waits for it (TLA+ `Sdk_StaleReply`).
     pub(crate) fn resolve(&mut self, reply: proto::Reply) -> bool {
         match self.calls.remove(&reply.id) {
-            Some((_, tx)) => {
-                let _ = tx.send(Ok(reply));
+            Some(entry) => {
+                let _ = entry.tx.send(Ok(reply));
                 true
             }
             None => false,
@@ -49,12 +73,13 @@ impl CallTable {
     }
 
     pub(crate) fn fail(&mut self, id: u32, err: Error) {
-        if let Some((_, tx)) = self.calls.remove(&id) {
-            let _ = tx.send(Err(err));
+        if let Some(entry) = self.calls.remove(&id) {
+            let _ = entry.tx.send(Err(err));
         }
     }
 
-    /// Fails every call of a transport (after its close was reported).
+    /// Fails every call of a transport (after its close was reported), each
+    /// with its loss error.
     pub(crate) fn sweep(&mut self, transport: TransportId) {
         self.closed.insert(transport);
         // Transport ids only grow: keep the most recent ones, so the set
@@ -69,25 +94,27 @@ impl CallTable {
         let ids: Vec<u32> = self
             .calls
             .iter()
-            .filter(|(_, (t, _))| *t == transport)
+            .filter(|(_, entry)| entry.transport == transport)
             .map(|(id, _)| *id)
             .collect();
         for id in ids {
-            self.fail(id, Error::ClientDisconnected);
+            if let Some(entry) = self.calls.remove(&id) {
+                let _ = entry.tx.send(Err(entry.on_loss));
+            }
         }
     }
 
     pub(crate) fn fail_all(&mut self, err: &Error) {
-        for (_, (_, tx)) in self.calls.drain() {
-            let _ = tx.send(Err(err.clone()));
+        for (_, entry) in self.calls.drain() {
+            let _ = entry.tx.send(Err(err.clone()));
         }
     }
 }
 
 /// Removes the call when its future is dropped (cancel safety, §4.3).
-struct CallGuard<'a> {
-    shared: &'a Shared,
-    id: u32,
+pub(crate) struct CallGuard<'a> {
+    pub(crate) shared: &'a Shared,
+    pub(crate) id: u32,
 }
 
 impl Drop for CallGuard<'_> {
@@ -102,7 +129,7 @@ const LATE: Duration = Duration::from_secs(1);
 /// Waits until the client's ops before this call are applied, then until it's
 /// connected (and, for subscription calls, until the subscription is
 /// subscribed). Calls from a handler or a callback can't wait for the loop.
-async fn wait_ready(
+pub(crate) async fn wait_ready(
     shared: &Shared,
     sub: Option<&SubInner>,
     deadline: tokio::time::Instant,
@@ -197,7 +224,7 @@ pub(crate) async fn call(
     cmd.id = id;
     let (tx, rx) = oneshot::channel();
     if lock(&shared.calls)
-        .insert(id, session.transport, tx)
+        .insert(id, session.transport, Error::ClientDisconnected, tx)
         .is_err()
     {
         return Err(Error::ClientDisconnected);
@@ -219,7 +246,7 @@ pub(crate) async fn call(
     Ok(reply)
 }
 
-async fn wait_reply(
+pub(crate) async fn wait_reply(
     mut rx: oneshot::Receiver<Result<proto::Reply, Error>>,
     deadline: tokio::time::Instant,
 ) -> Result<proto::Reply, Error> {
@@ -357,5 +384,50 @@ pub(crate) async fn sub_ready(
             .await
             .unwrap_or(Err(Error::Timeout)),
         None => fut.await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use centrifuge_client_core::machine::TransportId;
+    use tokio::sync::oneshot;
+    use tokio::sync::oneshot::error::TryRecvError;
+
+    use super::CallTable;
+    use crate::error::Error;
+
+    const LOST: TransportId = 7;
+
+    #[test]
+    fn rpc_sweep_fails_each_call_with_its_loss_error() {
+        let mut table: CallTable = CallTable::default();
+        let (rpc_tx, mut rpc_rx) = oneshot::channel();
+        let (plain_tx, mut plain_rx) = oneshot::channel();
+        table
+            .insert(1, LOST, Error::ConnectionClosed, rpc_tx)
+            .expect("the transport is open");
+        table
+            .insert(2, LOST, Error::ClientDisconnected, plain_tx)
+            .expect("the transport is open");
+        table.sweep(LOST);
+        assert!(matches!(
+            rpc_rx.try_recv(),
+            Ok(Err(Error::ConnectionClosed))
+        ));
+        assert!(matches!(
+            plain_rx.try_recv(),
+            Ok(Err(Error::ClientDisconnected))
+        ));
+    }
+
+    #[test]
+    fn rpc_sweep_leaves_the_calls_of_other_transports() {
+        let mut table: CallTable = CallTable::default();
+        let (tx, mut rx) = oneshot::channel();
+        table
+            .insert(1, LOST + 1, Error::ConnectionClosed, tx)
+            .expect("the transport is open");
+        table.sweep(LOST);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }

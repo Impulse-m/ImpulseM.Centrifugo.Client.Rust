@@ -19,6 +19,9 @@ pub enum Error {
     Timeout,
     /// The client is disconnected (or the connection ended while waiting).
     ClientDisconnected,
+    /// The connection was lost while an rpc call was on it. The call is not
+    /// resent on the next connection.
+    ConnectionClosed,
     /// The client was closed.
     ClientClosed,
     /// The subscription is unsubscribed (or became so while waiting).
@@ -49,6 +52,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Timeout => f.write_str("timeout"),
             Self::ClientDisconnected => f.write_str("client disconnected"),
+            Self::ConnectionClosed => f.write_str("connection closed"),
             Self::ClientClosed => f.write_str("client closed"),
             Self::SubscriptionUnsubscribed => f.write_str("subscription unsubscribed"),
             Self::DuplicateSubscription => f.write_str("duplicate subscription"),

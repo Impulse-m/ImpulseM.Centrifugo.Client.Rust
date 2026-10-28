@@ -96,6 +96,7 @@ pub use events::{
     UnsubscribedEvent,
 };
 pub use maybe_send::{MaybeSend, MaybeSync};
+pub use rpc_call::{RpcCall, RpcOptions};
 pub use stats::Statistics;
 pub use stream::EventStream;
 pub use subscription::{

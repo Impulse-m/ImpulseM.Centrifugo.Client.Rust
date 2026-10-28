@@ -55,6 +55,10 @@ pub type FlowId = u64;
 /// Identifies one transport (connection attempt).
 pub type TransportId = u64;
 
+/// Connect flag that asks the server for the RPC options (tracked rpc calls).
+/// The server answers with the flags it enabled, in `ConnectResult.flag`.
+pub const RPC_OPTIONS_FLAG: i64 = 1 << 32;
+
 /// A shareable error from app code or the transport.
 pub type ArcError = Arc<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -330,6 +334,8 @@ pub struct CoreConfig {
     pub name: String,
     /// Client version.
     pub version: String,
+    /// Client instance, sent in the connect command; empty when the client has none.
+    pub instance: String,
     /// Emulated headers, sent in the connect command.
     pub emulated_headers: HashMap<String, String>,
     /// Command timeout.
@@ -358,6 +364,7 @@ impl Default for CoreConfig {
             data: Bytes::new(),
             name: "rust".into(),
             version: String::new(),
+            instance: String::new(),
             emulated_headers: HashMap::new(),
             timeout: Duration::from_secs(5),
             handshake_timeout: Duration::from_secs(5),

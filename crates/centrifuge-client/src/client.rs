@@ -31,6 +31,8 @@ use crate::events::{
 };
 use crate::instance::{self, Redacted};
 use crate::maybe_send::{MaybeSend, MaybeSync};
+use crate::rpc_call::{RpcCall, RpcOptions, validate_timeout};
+use crate::rpc_tracker::PendingSlot;
 use crate::shared::{CallConfig, Command, Shared, lock};
 use crate::stats::Statistics;
 use crate::stream::EventStream;
@@ -303,6 +305,27 @@ impl Client {
         };
         let reply = calls::call(&self.inner.shared, None, cmd).await?;
         Ok(reply.rpc.map(Into::into).unwrap_or_default())
+    }
+
+    /// Starts an RPC call with options (headers and a deadline), returning its
+    /// handle. Nothing is sent until [`RpcCall::wait`] is awaited.
+    ///
+    /// A client with an instance counts its calls against `max_pending_rpc`:
+    /// a call beyond that bound fails with code 16 when waited for. An invalid
+    /// data payload or timeout fails the same way.
+    pub fn rpc_call(&self, method: &str, data: impl Into<Bytes>, options: RpcOptions) -> RpcCall {
+        let data: Bytes = data.into();
+        let shared: Arc<Shared> = Arc::clone(&self.inner.shared);
+        let admission: Result<(Duration, Option<PendingSlot>), Error> = self
+            .validate("data", &data)
+            .and_then(|()| validate_timeout(options.timeout, shared.cfg.timeout))
+            .and_then(|timeout: Duration| {
+                shared
+                    .rpc
+                    .admit()
+                    .map(|pending: Option<PendingSlot>| (timeout, pending))
+            });
+        RpcCall::new(shared, method, data, options.headers, admission)
     }
 
     /// Sends an async message to the server (fire and forget). Resolves once
@@ -960,6 +983,7 @@ impl ClientBuilder {
             data: self.data,
             name: self.name,
             version: self.version,
+            instance: self.instance.clone().unwrap_or_default(),
             emulated_headers: self.emulated_headers,
             timeout: self.timeout,
             handshake_timeout: self.handshake_timeout,
@@ -976,6 +1000,8 @@ impl ClientBuilder {
             CallConfig {
                 protocol: self.protocol,
                 timeout: self.timeout,
+                has_instance: self.instance.is_some(),
+                max_pending_rpc: self.max_pending_rpc,
             },
             self.http_headers,
             net,

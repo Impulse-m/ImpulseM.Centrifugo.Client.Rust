@@ -280,6 +280,8 @@ impl Core {
                 name: self.cfg.name.clone(),
                 version: self.cfg.version.clone(),
                 headers: self.cfg.emulated_headers.clone(),
+                flag: super::RPC_OPTIONS_FLAG,
+                instance: self.cfg.instance.clone(),
                 ..Default::default()
             }),
             ..Default::default()

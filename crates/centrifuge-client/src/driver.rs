@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use centrifuge_client_core::machine::{
-    Callback, CallbackError, Core, Event, Input, Op, OpenRequest, Outputs, State, SubKey, SubState,
-    TimerKey, TransportId, TransportKind,
+    Callback, CallbackError, Core, Event, Input, Op, OpenRequest, Outputs, RPC_OPTIONS_FLAG, State,
+    SubKey, SubState, TimerKey, TransportId, TransportKind,
 };
 use centrifuge_client_core::proto;
 use futures_util::FutureExt as _;
@@ -63,6 +63,8 @@ struct TransportHandle {
     task: JoinHandle<()>,
     closing: watch::Sender<bool>,
     writer: Option<WriterTx>,
+    /// The server confirmed the RPC options in the connect reply.
+    rpc_options: bool,
 }
 
 pub(crate) struct Driver {
@@ -297,6 +299,12 @@ impl Driver {
                 reply,
                 _permit: permit,
             } => {
+                if let Some(connect) = reply.connect.as_ref() {
+                    let confirmed: bool = connect.flag & RPC_OPTIONS_FLAG != 0;
+                    if let Some(h) = self.transports.get_mut(&transport) {
+                        h.rpc_options = confirmed;
+                    }
+                }
                 self.step(Input::Item { transport, reply }, None).await;
                 // The read-ahead budget is released once the item is handled.
                 drop(permit);
@@ -406,13 +414,15 @@ impl Driver {
     fn publish(&self, subs: &[SubKey], after_delivery: bool) {
         let state = self.core.state();
         let session = self.core.session().and_then(|s| {
-            let writer = self.transports.get(&s.transport)?.writer.clone()?;
+            let handle = self.transports.get(&s.transport)?;
+            let writer = handle.writer.clone()?;
             Some(SessionHandle {
                 transport: s.transport,
                 kind: s.kind,
                 writer,
                 session: s.session,
                 node: s.node,
+                rpc_options: handle.rpc_options,
             })
         });
         let snap = Snapshot {
@@ -480,6 +490,7 @@ impl Driver {
                 task,
                 closing: closing_tx,
                 writer: None,
+                rpc_options: false,
             },
         );
     }
