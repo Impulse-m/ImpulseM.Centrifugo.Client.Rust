@@ -94,6 +94,7 @@ fn register(
             user: String::new(),
             session: format!("session-{id}"),
             subs: std::collections::HashMap::new(),
+            instance: String::new(),
         },
     );
     drop(st);
@@ -597,7 +598,8 @@ fn history(st: &mut St, req: &proto::HistoryRequest) -> proto::HistoryResult {
     }
 }
 
-/// Handles one command: records it, then the hook or the default.
+/// Handles one command: records it, applies its acknowledgements and cancel,
+/// then the hook or the default.
 pub(crate) fn handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Out> {
     let (received, hook, hold) = {
         let mut st = inner.st();
@@ -610,6 +612,15 @@ pub(crate) fn handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Ou
             protocol: c.protocol,
             command: cmd.clone(),
         };
+        let instance: String = c.instance.clone();
+        if let Some(rpc) = &cmd.rpc {
+            for msg_id in &rpc.ack {
+                st.rpc_records.remove(&(instance.clone(), *msg_id));
+            }
+            if rpc.cancel != 0 {
+                st.rpc_records.remove(&(instance, rpc.cancel));
+            }
+        }
         st.received.push(r.clone());
         (r, st.on_command.clone(), st.faults.hold_replies)
     };
@@ -617,10 +628,26 @@ pub(crate) fn handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Ou
     if hold {
         return vec![];
     }
-    if let Some(action) = hook.and_then(|h| h(&received)) {
-        return act(inner, id, cmd, action);
+    let is_rpc: bool = cmd.rpc.is_some();
+    let outs: Vec<Out> = match hook.and_then(|h| h(&received)) {
+        Some(action) => act(inner, id, cmd, action),
+        None => default_handle(inner, id, cmd),
+    };
+    if is_rpc && !outs.is_empty() && take_lost_rpc_reply(inner) {
+        return vec![];
     }
-    default_handle(inner, id, cmd)
+    outs
+}
+
+/// Whether the reply of an rpc command answered right away is lost, by the
+/// `lose_next_rpc_replies` fault.
+fn take_lost_rpc_reply(inner: &Inner) -> bool {
+    let mut st = inner.st();
+    if st.faults.lose_rpc_replies == 0 {
+        return false;
+    }
+    st.faults.lose_rpc_replies -= 1;
+    true
 }
 
 fn act(inner: &Arc<Inner>, id: u64, cmd: proto::Command, action: Action) -> Vec<Out> {
@@ -690,6 +717,9 @@ fn default_handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Out> 
     if let Some(req) = &cmd.connect {
         if connected {
             return vec![Out::Close(3501, "bad request".into())];
+        }
+        if let Some(c) = inner.st().conns.get_mut(&id) {
+            c.instance.clone_from(&req.instance);
         }
         let hook = inner.st().on_connect.clone();
         let res = match hook {
@@ -846,12 +876,48 @@ fn default_handle(inner: &Arc<Inner>, id: u64, cmd: proto::Command) -> Vec<Out> 
         });
     }
     if let Some(req) = &cmd.rpc {
-        // Echo.
-        return reply(proto::Reply {
-            rpc: Some(proto::RpcResult {
-                data: req.data.clone(),
+        // A cancel is answered with nothing and runs nothing.
+        if req.cancel != 0 {
+            return reply(proto::Reply {
+                rpc: Some(proto::RpcResult::default()),
                 ..Default::default()
-            }),
+            });
+        }
+        let instance: String = inner
+            .st()
+            .conns
+            .get(&id)
+            .map(|c: &Conn| c.instance.clone())
+            .unwrap_or_default();
+        if req.msg_id != 0 {
+            let record: Option<proto::RpcResult> = inner
+                .st()
+                .rpc_records
+                .get(&(instance.clone(), req.msg_id))
+                .cloned();
+            if let Some(record) = record {
+                return reply(proto::Reply {
+                    rpc: Some(proto::RpcResult {
+                        cached: true,
+                        ..record
+                    }),
+                    ..Default::default()
+                });
+            }
+        }
+        // Echo. A tracked call is recorded until acknowledged or cancelled.
+        let result: proto::RpcResult = proto::RpcResult {
+            data: req.data.clone(),
+            ..Default::default()
+        };
+        if req.msg_id != 0 {
+            let mut st = inner.st();
+            st.rpc_records
+                .insert((instance, req.msg_id), result.clone());
+            st.rpc_runs.push(req.msg_id);
+        }
+        return reply(proto::Reply {
+            rpc: Some(result),
             ..Default::default()
         });
     }

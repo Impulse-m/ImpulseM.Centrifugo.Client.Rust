@@ -153,6 +153,8 @@ pub(crate) struct Conn {
     pub(crate) user: String,
     pub(crate) session: String,
     pub(crate) subs: HashMap<String, SubInfo>,
+    /// `ConnectRequest.instance` of the connection; empty for a plain client.
+    pub(crate) instance: String,
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +177,7 @@ pub(crate) struct Faults {
     pub(crate) stale_close: Option<Duration>,
     pub(crate) pause_reads: Option<Duration>,
     pub(crate) html_stream: bool,
+    pub(crate) lose_rpc_replies: usize,
 }
 
 pub(crate) struct St {
@@ -191,6 +194,11 @@ pub(crate) struct St {
     /// Every HTTP request: path and headers (upgrades, streams, emulation).
     pub(crate) requests: Vec<(String, hyper::HeaderMap)>,
     pub(crate) next_epoch: u64,
+    /// Answers of tracked rpc calls, kept until acknowledged or cancelled, keyed
+    /// by the instance of the connection and the `msg_id`.
+    pub(crate) rpc_records: HashMap<(String, u64), proto::RpcResult>,
+    /// The `msg_id` of every tracked rpc call the server ran, in order.
+    pub(crate) rpc_runs: Vec<u64>,
 }
 
 pub(crate) struct Inner {
@@ -265,6 +273,8 @@ impl FakeServer {
                 connects: 0,
                 requests: Vec::new(),
                 next_epoch: 1,
+                rpc_records: HashMap::new(),
+                rpc_runs: Vec::new(),
             }),
             version: watch::Sender::new(0),
             accept: Mutex::new(None),
@@ -569,6 +579,12 @@ impl FakeServer {
         self.faults(|f| f.stale_close = d);
     }
 
+    /// The next `n` rpc commands run as usual, but their replies are never sent
+    /// (the call reached the server and its answer was lost on the way back).
+    pub fn lose_next_rpc_replies(&self, n: usize) {
+        self.faults(|f| f.lose_rpc_replies = n);
+    }
+
     // ---- assertions ----
 
     /// Every command received, in order.
@@ -608,6 +624,32 @@ impl FakeServer {
     /// HTTP-stream requests, emulation requests), in order.
     pub fn requests(&self) -> Vec<(String, hyper::HeaderMap)> {
         self.inner.st().requests.clone()
+    }
+
+    /// How many times the server ran the tracked rpc call with this `msg_id`.
+    /// A retransmitted call answered from the record is not run again.
+    pub fn rpc_executions(&self, msg_id: u64) -> usize {
+        self.inner
+            .st()
+            .rpc_runs
+            .iter()
+            .filter(|run: &&u64| **run == msg_id)
+            .count()
+    }
+
+    /// The `msg_id`s whose answers the server still holds, ascending: a call is
+    /// held until its reply is acknowledged or the client cancels it.
+    pub fn rpc_record_msg_ids(&self) -> Vec<u64> {
+        let mut ids: Vec<u64> = self
+            .inner
+            .st()
+            .rpc_records
+            .keys()
+            .map(|key: &(String, u64)| key.1)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 
     /// Open connections.
