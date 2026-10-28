@@ -121,8 +121,10 @@ impl RpcCall {
     ///
     /// [`Error::Server`] with code 15, 16 or 17 for a call that was not sent or
     /// was stopped, or with the server's error; [`Error::Timeout`] past the
-    /// deadline; [`Error::ConnectionClosed`] when the connection was lost while
-    /// the call was on it. Awaiting a second time, on a clone, fails with
+    /// deadline. A tracked call lost with its connection is sent again on the
+    /// next one, so [`Error::ConnectionClosed`] comes only for a plain call lost
+    /// with its connection, or a tracked one whose next connection does not
+    /// confirm the RPC options. Awaiting a second time, on a clone, fails with
     /// [`Error::Configuration`].
     pub async fn wait(self) -> Result<RpcResult, Error> {
         if let Some(error) = self.inner.refused.clone() {
@@ -152,70 +154,103 @@ impl RpcCall {
 }
 
 impl RpcCallInner {
-    /// Writes the call once the connection is up, then waits for its reply.
+    /// Writes the call once the connection is up, then waits for its reply. A
+    /// tracked call lost with its connection is written again on the next one,
+    /// with the same `msg_id` and `retransmit` set, until its deadline.
     async fn send_and_wait(&self, deadline: tokio::time::Instant) -> Result<RpcResult, Error> {
-        wait_ready(&self.shared, None, deadline).await?;
-        let session: SessionHandle = self
-            .shared
-            .snapshot
-            .borrow()
-            .session
-            .clone()
-            .ok_or(Error::ClientDisconnected)?;
-        let tracked: bool = session.rpc_options && self.shared.rpc.has_instance();
-        if !tracked && !self.headers.is_empty() {
-            return Err(local_error(
-                CODE_UNSUPPORTED,
-                "the connection cannot carry the headers of the call",
-            ));
-        }
-        let msg_id: Option<u64> = if tracked {
-            Some(self.shared.rpc.next_msg_id()?)
-        } else {
-            None
-        };
-        let id: u32 = self.shared.next_call_id();
-        let command: proto::Command = proto::Command {
-            id,
-            rpc: Some(request(
+        let mut msg_id: Option<u64> = None;
+        let mut written: bool = false;
+        loop {
+            wait_ready(&self.shared, None, deadline).await?;
+            let session: SessionHandle = self
+                .shared
+                .snapshot
+                .borrow()
+                .session
+                .clone()
+                .ok_or(Error::ClientDisconnected)?;
+            let tracked: bool = session.rpc_options && self.shared.rpc.has_instance();
+            if !tracked && written {
+                // The connection cannot carry the msg_id of the lost call.
+                return Err(Error::ConnectionClosed);
+            }
+            if !tracked && !self.headers.is_empty() {
+                return Err(local_error(
+                    CODE_UNSUPPORTED,
+                    "the connection cannot carry the headers of the call",
+                ));
+            }
+            if tracked && msg_id.is_none() {
+                msg_id = Some(self.shared.rpc.next_msg_id()?);
+            }
+            let attempt: Option<u64> = if tracked { msg_id } else { None };
+            let id: u32 = self.shared.next_call_id();
+            let acks: Vec<u64> = if tracked {
+                self.shared.rpc.take_acks()
+            } else {
+                Vec::new()
+            };
+            let mut rpc: proto::RpcRequest = request(
                 &self.method,
                 self.data.clone(),
                 self.headers.clone(),
-                msg_id,
-            )),
-            ..Default::default()
-        };
-        let (tx, rx) = oneshot::channel();
-        if lock(&self.shared.calls)
-            .insert(id, session.transport, Error::ConnectionClosed, tx)
-            .is_err()
-        {
-            return Err(Error::ClientDisconnected);
+                attempt,
+            );
+            rpc.ack.clone_from(&acks);
+            rpc.retransmit = written;
+            let command: proto::Command = proto::Command {
+                id,
+                rpc: Some(rpc),
+                ..Default::default()
+            };
+            let (tx, rx) = oneshot::channel();
+            if lock(&self.shared.calls)
+                .insert(id, session.transport, Error::ConnectionClosed, tx)
+                .is_err()
+            {
+                self.shared.rpc.restore_acks(acks);
+                return Err(Error::ClientDisconnected);
+            }
+            let guard: CallGuard<'_> = CallGuard {
+                shared: &self.shared,
+                id,
+            };
+            if session
+                .writer
+                .send(WriteReq::call(command, id, &session))
+                .is_err()
+            {
+                self.shared.rpc.restore_acks(acks);
+                return Err(Error::ClientDisconnected);
+            }
+            let mut cancel_on_drop: Option<CancelOnDrop> = attempt
+                .map(|msg: u64| CancelOnDrop::new(Arc::clone(&self.shared), session.clone(), msg));
+            let outcome: Result<proto::Reply, Error> = wait_reply(rx, deadline).await;
+            drop(guard);
+            match outcome {
+                Ok(reply) => {
+                    if let Some(cancel) = cancel_on_drop.as_mut() {
+                        cancel.disarm();
+                    }
+                    if let Some(msg) = attempt {
+                        self.shared.rpc.acknowledge(msg);
+                    }
+                    if let Some(error) = reply.error {
+                        return Err(Error::Server(error.into()));
+                    }
+                    return Ok(reply.rpc.map(Into::into).unwrap_or_default());
+                }
+                Err(Error::ConnectionClosed) if attempt.is_some() => {
+                    // The call is sent again on the next connection: no cancel now.
+                    if let Some(cancel) = cancel_on_drop.as_mut() {
+                        cancel.disarm();
+                    }
+                    written = true;
+                }
+                // A timeout or a cancel returns here with the cancel still armed.
+                Err(error) => return Err(error),
+            }
         }
-        let guard: CallGuard<'_> = CallGuard {
-            shared: &self.shared,
-            id,
-        };
-        if session
-            .writer
-            .send(WriteReq::call(command, id, &session))
-            .is_err()
-        {
-            return Err(Error::ClientDisconnected);
-        }
-        let mut cancel_on_drop: Option<CancelOnDrop> = msg_id
-            .map(|msg: u64| CancelOnDrop::new(Arc::clone(&self.shared), session.clone(), msg));
-        let outcome: Result<proto::Reply, Error> = wait_reply(rx, deadline).await;
-        drop(guard);
-        // A timeout or a lost connection returns here with the cancel still armed.
-        let reply: proto::Reply = outcome?;
-        if let Some(cancel) = cancel_on_drop.as_mut() {
-            cancel.disarm();
-        }
-        if let Some(error) = reply.error {
-            return Err(Error::Server(error.into()));
-        }
-        Ok(reply.rpc.map(Into::into).unwrap_or_default())
     }
 }
 

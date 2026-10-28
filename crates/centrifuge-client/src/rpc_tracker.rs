@@ -1,14 +1,18 @@
-//! Tracking of rpc calls: the admission bound, the `msg_ids`, the request shapes
-//! and the cancel command of a sent call.
+//! Tracking of rpc calls: the admission bound, the `msg_ids`, the request shapes,
+//! the acknowledgements and the cancel command of a sent call.
 //!
 //! A call of a client with an instance is tracked when the connection confirmed
 //! the RPC options: it carries a `msg_id`, so the server runs it at most once,
 //! and it counts against `max_pending_rpc`. Any other call is plain: no `msg_id`.
-//! Stopping a sent tracked call (cancel, timeout, or its waiter going away)
-//! sends a cancel command for its `msg_id`.
+//! A tracked call that was written when its connection was lost is sent again on
+//! the next connection, with the same `msg_id` and `retransmit` set. The `msg_id`
+//! of a tracked reply is queued as an acknowledgement, which the next command
+//! written on a capable connection carries in its `ack` list. Stopping a sent
+//! tracked call (cancel, timeout, or its waiter going away) sends a cancel
+//! command for its `msg_id`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -66,13 +70,15 @@ pub(crate) fn cancel_request(msg_id: u64) -> proto::RpcRequest {
     }
 }
 
-/// The rpc bookkeeping of one client: the admission bound and the `msg_ids`.
+/// The rpc bookkeeping of one client: the admission bound, the `msg_ids` and the
+/// acknowledgements waiting for the next command.
 #[derive(Debug)]
 pub(crate) struct RpcTracker {
     has_instance: bool,
     max_pending: u32,
     pending: Arc<Mutex<u32>>,
     generator: Mutex<Option<MsgIdGenerator>>,
+    acks: Mutex<Vec<u64>>,
 }
 
 impl RpcTracker {
@@ -84,12 +90,33 @@ impl RpcTracker {
             max_pending,
             pending: Arc::new(Mutex::new(0)),
             generator: Mutex::new(None),
+            acks: Mutex::new(Vec::new()),
         }
     }
 
     /// Whether the client has an instance, so its calls can be tracked.
     pub(crate) fn has_instance(&self) -> bool {
         self.has_instance
+    }
+
+    /// Queues the acknowledgement of a tracked call whose reply arrived. The next
+    /// command written on a capable connection carries it.
+    pub(crate) fn acknowledge(&self, msg_id: u64) {
+        lock(&self.acks).push(msg_id);
+    }
+
+    /// Takes the acknowledgements waiting for the next command. A command that
+    /// was not written gives them back with [`Self::restore_acks`].
+    pub(crate) fn take_acks(&self) -> Vec<u64> {
+        std::mem::take(&mut *lock(&self.acks))
+    }
+
+    /// Puts back the acknowledgements of a command that was not written, ahead of
+    /// any queued since.
+    pub(crate) fn restore_acks(&self, mut acks: Vec<u64>) {
+        let mut pending: MutexGuard<'_, Vec<u64>> = lock(&self.acks);
+        acks.append(&mut pending);
+        *pending = acks;
     }
 
     /// Admits a call. With an instance, the call takes a pending slot, held
@@ -175,16 +202,25 @@ impl Drop for CancelOnDrop {
     }
 }
 
-/// Writes the cancel command of a `msg_id`. Its reply is not awaited: a reply
-/// nobody waits for is dropped by the transport.
+/// Writes the cancel command of a `msg_id`, carrying the queued acknowledgements.
+/// Its reply is not awaited: a reply nobody waits for is dropped by the transport.
 fn send_cancel(shared: &Shared, session: &SessionHandle, msg_id: u64) {
     let id: u32 = shared.next_call_id();
+    let acks: Vec<u64> = shared.rpc.take_acks();
+    let mut rpc: proto::RpcRequest = cancel_request(msg_id);
+    rpc.ack.clone_from(&acks);
     let command: proto::Command = proto::Command {
         id,
-        rpc: Some(cancel_request(msg_id)),
+        rpc: Some(rpc),
         ..Default::default()
     };
-    let _ = session.writer.send(WriteReq::call(command, id, session));
+    if session
+        .writer
+        .send(WriteReq::call(command, id, session))
+        .is_err()
+    {
+        shared.rpc.restore_acks(acks);
+    }
 }
 
 /// The local clock in milliseconds since the unix epoch.
@@ -243,6 +279,25 @@ mod tests {
         assert_eq!(plain.msg_id, 0);
         assert_eq!(tracked.msg_id, 7);
         assert_eq!(plain.method, "echo");
+    }
+
+    #[test]
+    fn rpc_acks_are_taken_once_in_the_order_they_were_queued() {
+        let tracker: RpcTracker = RpcTracker::new(true, 32);
+        tracker.acknowledge(3);
+        tracker.acknowledge(5);
+        assert_eq!(tracker.take_acks(), vec![3, 5]);
+        assert!(tracker.take_acks().is_empty());
+    }
+
+    #[test]
+    fn rpc_restored_acks_go_ahead_of_the_ones_queued_since() {
+        let tracker: RpcTracker = RpcTracker::new(true, 32);
+        tracker.acknowledge(3);
+        let taken: Vec<u64> = tracker.take_acks();
+        tracker.acknowledge(5);
+        tracker.restore_acks(taken);
+        assert_eq!(tracker.take_acks(), vec![3, 5]);
     }
 
     #[test]
