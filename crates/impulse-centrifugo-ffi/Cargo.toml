@@ -1,0 +1,38 @@
+[package]
+name = "impulse-centrifugo-ffi"
+description = "C ABI of the ImpulseM Centrifugo client, linked into the desktop client as a static archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+centrifuge-client = { version = "=0.1.0", path = "../centrifuge-client" }
+http = "1.3"
+tokio = { version = "1.47", features = ["rt-multi-thread", "net", "time"] }
+url = "2.5"
+
+# The C ABI needs `unsafe` (raw pointers and `extern "C"` functions), so this
+# crate sets the workspace lints itself and allows `unsafe_code` in its root.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "warn"
