@@ -174,6 +174,9 @@ pub struct SubscribedInfo {
     pub stream_position: Option<StreamPosition>,
     /// Data from the server's subscribe reply.
     pub data: Bytes,
+    /// The publish debounce window in milliseconds the server set for the
+    /// channel; zero when publishes are not debounced.
+    pub publish_debounce: u32,
 }
 
 /// An event for the app, in the order of the state changes.

@@ -761,6 +761,7 @@ impl Core {
             stream_position: (res.positioned || res.recoverable)
                 .then(|| StreamPosition::new(res.offset, res.epoch.clone())),
             data: res.data,
+            publish_debounce: res.publish_debounce,
         };
         if res.id > 0 {
             self.by_push_id.insert(res.id, key);

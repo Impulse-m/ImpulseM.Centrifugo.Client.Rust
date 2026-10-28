@@ -16,7 +16,7 @@ use centrifuge_client_core::types::{
 use crate::calls;
 use crate::client::{
     Client, history_command, history_result, presence_command, presence_result,
-    presence_stats_command, presence_stats_result, publish_command,
+    presence_stats_command, presence_stats_result,
 };
 use crate::config::{defaults, duration};
 use crate::dispatch::SubHandlers;
@@ -231,6 +231,10 @@ impl Subscription {
 
     /// Publishes into the channel. Waits while subscribing, up to `timeout`.
     ///
+    /// When the server sets a publish debounce window for the channel, a
+    /// publish inside an open window replaces the pending value and succeeds
+    /// at once; the pending value is sent when the window ends.
+    ///
     /// A publish whose future is dropped before it resolves may still have
     /// been delivered.
     ///
@@ -242,13 +246,7 @@ impl Subscription {
         self.check()?;
         let data = data.into();
         self.validate("data", &data)?;
-        calls::call(
-            self.client.shared(),
-            Some(&self.inner),
-            publish_command(&self.inner.channel, data),
-        )
-        .await
-        .map(drop)
+        calls::publish(self.client.shared(), &self.inner, data).await
     }
 
     /// [`publish()`](Self::publish) of a value serialized as JSON.

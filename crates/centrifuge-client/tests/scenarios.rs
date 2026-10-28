@@ -923,3 +923,82 @@ async fn busy_stream_keeps_the_close_event() {
         "{rest:?}"
     );
 }
+
+/// Whether the command is a publish of exactly `data`.
+fn publishes(received: &Received, data: &[u8]) -> bool {
+    received
+        .command
+        .publish
+        .as_ref()
+        .is_some_and(|p: &proto::PublishRequest| &p.data[..] == data)
+}
+
+/// The publish debounce window of the subscribe reply coalesces a burst: the
+/// first publish is sent at once, and the publishes inside the window replace
+/// one pending value, which is sent when the window ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscription_publish_debounce_coalesces_a_burst() {
+    let srv = server().await;
+    srv.on_subscribe(|_req| {
+        Ok(proto::SubscribeResult {
+            publish_debounce: 300,
+            ..Default::default()
+        })
+    });
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    let sub = client.new_subscription("debounced").build().unwrap();
+    sub.subscribe();
+    client.connect().unwrap();
+    sub.ready(Some(Duration::from_secs(5))).await.unwrap();
+
+    sub.publish(r#"{"n":1}"#).await.unwrap();
+    sub.publish(r#"{"n":2}"#).await.unwrap();
+    sub.publish(r#"{"n":3}"#).await.unwrap();
+    srv.wait_for(|r| publishes(r, br#"{"n":1}"#)).await;
+    srv.wait_for(|r| publishes(r, br#"{"n":3}"#)).await;
+    assert_eq!(
+        srv.count(|r| r.command.publish.is_some()),
+        2,
+        "the publish inside the window was not sent"
+    );
+    client.close().await;
+}
+
+/// Unsubscribing drops the open window and its pending value: the next
+/// subscribe reply sets a fresh window, so the first publish is sent at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscription_publish_debounce_resets_on_unsubscribe() {
+    let srv = server().await;
+    srv.on_subscribe(|_req| {
+        Ok(proto::SubscribeResult {
+            publish_debounce: 60_000,
+            ..Default::default()
+        })
+    });
+    let client = builder(&srv, TransportKind::WebSocket, Protocol::Protobuf)
+        .build()
+        .unwrap();
+    let sub = client.new_subscription("debounced").build().unwrap();
+    sub.subscribe();
+    client.connect().unwrap();
+    sub.ready(Some(Duration::from_secs(5))).await.unwrap();
+
+    sub.publish(r#"{"n":1}"#).await.unwrap();
+    sub.publish(r#"{"n":2}"#).await.unwrap();
+    sub.unsubscribe();
+    // The unsubscribe reached the server, so the driver has applied it: a
+    // ready() taken now counts from the new subscription.
+    srv.wait_for(|r| r.command.unsubscribe.is_some()).await;
+    sub.subscribe();
+    sub.ready(Some(Duration::from_secs(5))).await.unwrap();
+    sub.publish(r#"{"n":3}"#).await.unwrap();
+    srv.wait_for(|r| publishes(r, br#"{"n":3}"#)).await;
+    assert_eq!(
+        srv.count(|r| r.command.publish.is_some()),
+        2,
+        "the pending value survived the unsubscribe"
+    );
+    client.close().await;
+}

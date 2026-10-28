@@ -18,8 +18,6 @@
 //! the window and any pending value; the caller runs it when the subscription is
 //! unsubscribed and when the connection is lost.
 
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;

@@ -10,11 +10,12 @@ use centrifuge_client_core::codec::Protocol;
 use centrifuge_client_core::machine::{
     Op, State, SubKey, SubState, TokenStatus, TransportId, TransportKind,
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use crate::calls::CallTable;
 use crate::dispatch::{ClientHandlers, StreamSlot, SubHandlers};
 use crate::events::{ClientEvent, PublicationEvent, SubscriptionEvent};
+use crate::publish_debounce::PublishDebounce;
 use crate::rpc_tracker::RpcTracker;
 use crate::server_time::ServerTime;
 use crate::transport::WriterTx;
@@ -113,6 +114,8 @@ pub(crate) struct SubInner {
     pub(crate) callbacks: crate::driver::SubCallbacks,
     /// Delta compression is on (the tags filter can't change then).
     pub(crate) delta: bool,
+    /// The publish debounce window the server set in the subscribe reply.
+    pub(crate) publish_debounce: Mutex<PublishDebounce>,
 }
 
 impl std::fmt::Debug for SubInner {
@@ -166,6 +169,9 @@ pub(crate) struct Shared {
     /// Set by `close()` and when the last `Client` handle is dropped: the
     /// driver stops waiting for stream consumers (§9.4).
     pub(crate) stop: watch::Sender<bool>,
+    /// Wakes the driver when a publish opens a debounce window, so the driver
+    /// arms its timer for the window end.
+    pub(crate) debounce_wake: Notify,
 }
 
 impl std::fmt::Debug for Shared {
@@ -213,6 +219,7 @@ impl Shared {
             close_waiters: Mutex::new(Some(Vec::new())),
             op_lock: Mutex::new(false),
             stop: watch::Sender::new(false),
+            debounce_wake: Notify::new(),
         }
     }
 
@@ -306,6 +313,7 @@ impl SubInner {
             removed: std::sync::atomic::AtomicBool::new(false),
             callbacks,
             delta,
+            publish_debounce: Mutex::new(PublishDebounce::default()),
         }
     }
 

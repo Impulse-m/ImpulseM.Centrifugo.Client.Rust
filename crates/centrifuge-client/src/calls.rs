@@ -8,12 +8,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use centrifuge_client_core::machine::{State, SubState, TransportId};
 use centrifuge_client_core::proto;
 use tokio::sync::oneshot;
 
+use crate::client::publish_command;
 use crate::dispatch::{in_callback, in_handler};
 use crate::error::Error;
+use crate::publish_debounce::PublishAction;
 use crate::shared::{Shared, SubInner, lock};
 use crate::transport::WriteReq;
 
@@ -209,11 +212,53 @@ pub(crate) async fn wait_ready(
 pub(crate) async fn call(
     shared: &Arc<Shared>,
     sub: Option<&SubInner>,
-    mut cmd: proto::Command,
+    cmd: proto::Command,
 ) -> Result<proto::Reply, Error> {
     let timeout = shared.cfg.timeout;
     let deadline = tokio::time::Instant::now() + timeout.min(crate::config::MAX_DURATION);
     wait_ready(shared, sub, deadline).await?;
+    call_ready(shared, cmd, deadline).await
+}
+
+/// `publish()` into a subscribed channel. Once subscribed, the publish goes
+/// through the channel's debounce window: a publish inside an open window is
+/// held as the pending value and succeeds at once, and the driver sends the
+/// pending value when the window ends.
+pub(crate) async fn publish(
+    shared: &Arc<Shared>,
+    sub: &SubInner,
+    data: Bytes,
+) -> Result<(), Error> {
+    let timeout = shared.cfg.timeout;
+    let deadline = tokio::time::Instant::now() + timeout.min(crate::config::MAX_DURATION);
+    wait_ready(shared, Some(sub), deadline).await?;
+    let (action, opened): (PublishAction, bool) = {
+        let mut debounce = lock(&sub.publish_debounce);
+        let was_open: bool = debounce.next_deadline().is_some();
+        let action: PublishAction = debounce.publish(data, std::time::Instant::now());
+        let opened: bool = !was_open && debounce.next_deadline().is_some();
+        (action, opened)
+    };
+    if opened {
+        shared.debounce_wake.notify_one();
+    }
+    match action {
+        PublishAction::Coalesced => Ok(()),
+        PublishAction::Send(data) => {
+            call_ready(shared, publish_command(&sub.channel, data), deadline)
+                .await
+                .map(drop)
+        }
+    }
+}
+
+/// Sends a call command once the client is ready for it and waits for its
+/// reply.
+async fn call_ready(
+    shared: &Arc<Shared>,
+    mut cmd: proto::Command,
+    deadline: tokio::time::Instant,
+) -> Result<proto::Reply, Error> {
     let session = shared
         .snapshot
         .borrow()

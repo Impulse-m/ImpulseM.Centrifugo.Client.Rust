@@ -39,6 +39,7 @@ fn info_of(res: &proto::SubscribeResult) -> SubscribedInfo {
         stream_position: (res.positioned || res.recoverable)
             .then(|| StreamPosition::new(res.offset, res.epoch.clone())),
         data: res.data.clone(),
+        publish_debounce: res.publish_debounce,
     }
 }
 
@@ -130,6 +131,8 @@ impl Core {
                 stream_position: (s.positioned || s.recoverable)
                     .then(|| StreamPosition::new(s.offset, s.epoch)),
                 data: s.data,
+                // Server-side subscriptions are not published to by the client.
+                publish_debounce: 0,
             };
             out.event(Event::ServerSubscribed { channel, info });
             return;

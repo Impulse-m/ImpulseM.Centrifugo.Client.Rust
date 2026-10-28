@@ -18,9 +18,11 @@ use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::calls;
+use crate::client::publish_command;
 use crate::dispatch::{Dispatcher, IN_CALLBACK};
 use crate::error::TokenError;
-use crate::shared::{Command, SessionHandle, Shared, Snapshot, SubSnapshot, lock};
+use crate::shared::{Command, SessionHandle, Shared, Snapshot, SubInner, SubSnapshot, lock};
 use crate::transport::{
     self, Inbound, LastReceived, READ_AHEAD_BYTES, READ_AHEAD_ITEMS, WriteReq, WriterTx,
 };
@@ -113,6 +115,8 @@ enum Next {
     Inbound(Inbound),
     Callback(Input),
     Timer(TimerKey, bool),
+    /// A publish debounce window may have ended, or a window was opened.
+    Debounce,
     Watchdog,
 }
 
@@ -188,6 +192,14 @@ impl Driver {
                 None => std::future::pending().await,
             }
         };
+        let debounce = self.earliest_debounce_deadline();
+        let debounce_sleep = async {
+            match debounce {
+                Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+                None => std::future::pending().await,
+            }
+        };
+        let shared: Arc<Shared> = self.shared.clone();
         tokio::select! {
             biased;
             c = self.commands.recv() => Some(c.map_or(Next::Command(Command::Dropped), Next::Command)),
@@ -198,6 +210,8 @@ impl Driver {
                 let (at, key) = deadline?;
                 Some(Next::Timer(key, Self::now().saturating_duration_since(at) >= LATE))
             }
+            () = debounce_sleep => Some(Next::Debounce),
+            () = shared.debounce_wake.notified() => Some(Next::Debounce),
             _ = watchdog.tick() => Some(Next::Watchdog),
         }
     }
@@ -214,6 +228,12 @@ impl Driver {
         }
         if let Ok(c) = self.callbacks.try_recv() {
             return Some(Next::Callback(c));
+        }
+        if self
+            .earliest_debounce_deadline()
+            .is_some_and(|at: std::time::Instant| at <= Self::now())
+        {
+            return Some(Next::Debounce);
         }
         if let Some((at, key)) = self.core.next_deadline() {
             let now = Self::now();
@@ -265,8 +285,69 @@ impl Driver {
                 )
                 .await;
             }
+            Next::Debounce => self.fire_publish_debounce(Self::now()),
             Next::Watchdog => self.watchdog().await,
         }
+    }
+
+    /// The end of the earliest open publish debounce window, where the driver
+    /// must wake.
+    fn earliest_debounce_deadline(&self) -> Option<std::time::Instant> {
+        let subs: Vec<Arc<SubInner>> = lock(&self.shared.by_key).values().cloned().collect();
+        subs.iter()
+            .filter_map(|inner: &Arc<SubInner>| lock(&inner.publish_debounce).next_deadline())
+            .min()
+    }
+
+    /// Ends the publish debounce windows that are due. A pending value is sent
+    /// as a publish of its own in a task of its own; its outcome is discarded,
+    /// as its `publish()` call has already returned, as in the Swift client.
+    fn fire_publish_debounce(&mut self, now: std::time::Instant) {
+        let subs: Vec<Arc<SubInner>> = lock(&self.shared.by_key).values().cloned().collect();
+        for inner in subs {
+            let Some(data) = lock(&inner.publish_debounce).on_timer(now) else {
+                continue;
+            };
+            let shared: Arc<Shared> = self.shared.clone();
+            let cmd: proto::Command = publish_command(&inner.channel, data);
+            let task = tokio::spawn(async move {
+                let _ = calls::call(&shared, Some(inner.as_ref()), cmd).await;
+            });
+            self.tasks.retain(|t| !t.is_finished());
+            self.tasks.push(task.abort_handle());
+        }
+    }
+
+    /// Applies the events that change the publish debounce: a subscribe reply
+    /// sets the window of its channel, an unsubscribe drops it, and a lost
+    /// connection drops every window.
+    fn sync_publish_debounce(&self, events: &[Event]) {
+        for event in events {
+            match event {
+                Event::Subscribed { sub, info } => {
+                    if let Some(inner) = self.sub_inner(*sub) {
+                        lock(&inner.publish_debounce).set_window(info.publish_debounce);
+                    }
+                }
+                Event::Unsubscribed { sub, .. } => {
+                    if let Some(inner) = self.sub_inner(*sub) {
+                        lock(&inner.publish_debounce).reset();
+                    }
+                }
+                Event::Connecting { .. } | Event::Disconnected { .. } => {
+                    let subs: Vec<Arc<SubInner>> =
+                        lock(&self.shared.by_key).values().cloned().collect();
+                    for inner in subs {
+                        lock(&inner.publish_debounce).reset();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn sub_inner(&self, sub: SubKey) -> Option<Arc<SubInner>> {
+        lock(&self.shared.by_key).get(&sub).cloned()
     }
 
     async fn watchdog(&mut self) {
@@ -346,6 +427,9 @@ impl Driver {
         loop {
             let events = std::mem::take(&mut out.events);
             let fail = std::mem::take(&mut out.fail_calls);
+            // Before the snapshot is published: a publish that sees the
+            // subscription subscribed must already see its window.
+            self.sync_publish_debounce(&events);
             self.apply(out);
             let touched = touched_subs(&events);
             if events.is_empty() {
