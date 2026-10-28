@@ -212,6 +212,15 @@ impl Client {
         self.inner.shared.state()
     }
 
+    /// The server time in milliseconds since the unix epoch: the local wall clock
+    /// plus the offset of the last command reply that carried a time. The server
+    /// sends that time when it runs with `client.reply_include_server_time`.
+    /// Before such a reply it is the local time.
+    #[must_use]
+    pub fn server_time_millis(&self) -> i64 {
+        self.inner.shared.server_time.now_millis()
+    }
+
     /// Waits until the client is connected and its `connected` handler has
     /// returned.
     ///

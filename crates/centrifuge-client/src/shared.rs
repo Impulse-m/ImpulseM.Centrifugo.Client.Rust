@@ -14,6 +14,7 @@ use crate::calls::CallTable;
 use crate::dispatch::{ClientHandlers, StreamSlot, SubHandlers};
 use crate::events::{ClientEvent, PublicationEvent, SubscriptionEvent};
 use crate::rpc_tracker::RpcTracker;
+use crate::server_time::ServerTime;
 use crate::transport::WriterTx;
 
 /// Locks a mutex, recovering from poisoning (a panicking handler must never
@@ -139,6 +140,8 @@ pub(crate) struct Shared {
     pub(crate) next_key: AtomicU64,
     pub(crate) calls: Mutex<CallTable>,
     pub(crate) rpc: RpcTracker,
+    /// The offset of the server time, from the replies carrying a time.
+    pub(crate) server_time: ServerTime,
     pub(crate) next_call_id: AtomicU32,
     pub(crate) handlers: Mutex<ClientHandlers>,
     pub(crate) events_stream: Mutex<StreamSlot<ClientEvent>>,
@@ -191,6 +194,7 @@ impl Shared {
             next_key: AtomicU64::new(1),
             calls: Mutex::new(CallTable::default()),
             rpc,
+            server_time: ServerTime::default(),
             next_call_id: AtomicU32::new(CALL_ID_BASE),
             handlers: Mutex::new(ClientHandlers::default()),
             events_stream: Mutex::new(StreamSlot::default()),

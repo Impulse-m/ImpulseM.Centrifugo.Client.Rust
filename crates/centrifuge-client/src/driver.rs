@@ -299,6 +299,11 @@ impl Driver {
                 reply,
                 _permit: permit,
             } => {
+                // A command reply (id > 0) may carry the server time; pushes and
+                // server pings carry none.
+                if reply.id > 0 {
+                    self.shared.server_time.observe(reply.time);
+                }
                 if let Some(connect) = reply.connect.as_ref() {
                     let confirmed: bool = connect.flag & RPC_OPTIONS_FLAG != 0;
                     if let Some(h) = self.transports.get_mut(&transport) {

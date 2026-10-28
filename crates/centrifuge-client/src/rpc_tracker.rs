@@ -13,13 +13,13 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use centrifuge_client_core::proto;
 
 use crate::error::Error;
 use crate::msg_id::MsgIdGenerator;
+use crate::server_time::wall_millis;
 use crate::shared::{SessionHandle, Shared, lock};
 use crate::transport::WriteReq;
 
@@ -147,9 +147,9 @@ impl RpcTracker {
     pub(crate) fn next_msg_id(&self) -> Result<u64, Error> {
         let mut guard = lock(&self.generator);
         let generator: &mut MsgIdGenerator = guard.get_or_insert_with(|| {
-            MsgIdGenerator::new(clock_millis(), MsgIdGenerator::random_lane())
+            MsgIdGenerator::new(wall_millis(), MsgIdGenerator::random_lane())
         });
-        generator.next(clock_millis())
+        generator.next(wall_millis())
     }
 }
 
@@ -221,15 +221,6 @@ fn send_cancel(shared: &Shared, session: &SessionHandle, msg_id: u64) {
     {
         shared.rpc.restore_acks(acks);
     }
-}
-
-/// The local clock in milliseconds since the unix epoch.
-fn clock_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d: Duration| {
-            i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
-        })
 }
 
 #[cfg(test)]
