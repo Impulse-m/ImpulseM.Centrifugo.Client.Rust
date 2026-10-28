@@ -53,6 +53,12 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 name = "chat"
 required-features = ["serde"]
 
+# The live matrix needs `--features live` and a running Centrifugo v6
+# (`docker compose up -d` in the repository root).
+[[test]]
+name = "live"
+required-features = ["live"]
+
 [features]
 default = ["json", "http-stream", "system-proxy", "aws-lc-rs", "delta", "serde"]
 # The JSON protocol. Protobuf, the default protocol, is always built in.
@@ -72,6 +78,8 @@ serde = ["dep:serde", "dep:serde_json", "centrifuge-client-core/json"]
 rustls-config = []
 # Constructors for events and results, for unit-testing handlers.
 test-util = []
+# The live matrix (tests/live.rs) against a running Centrifugo v6.
+live = []
 
 [lints]
 workspace = true

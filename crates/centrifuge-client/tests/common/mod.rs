@@ -13,6 +13,8 @@ use centrifuge::{Client, ClientBuilder, Protocol, ProxyConfig, TransportEndpoint
 pub use centrifuge_fake_server::{Action, FakeConfig, FakeServer, Received, proto};
 use tokio::sync::mpsc;
 
+pub mod proxy;
+
 /// Every transport × protocol pair.
 pub const MATRIX: [(TransportKind, Protocol); 4] = [
     (TransportKind::WebSocket, Protocol::Protobuf),
