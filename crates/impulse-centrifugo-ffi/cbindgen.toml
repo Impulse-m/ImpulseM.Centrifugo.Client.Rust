@@ -9,13 +9,26 @@ no_includes = true
 sys_includes = ["stddef.h", "stdint.h"]
 
 [export]
-include = ["ImpulseCentrifugoStatus"]
+include = [
+    "ImpulseCentrifugoStatus",
+    "ImpulseCentrifugoCompletion",
+    "ImpulseCentrifugoEventCallback",
+]
 
 [export.rename]
 "ImpulseCentrifugoStatus" = "impulse_centrifugo_status"
 "ImpulseCentrifugoConfig" = "impulse_centrifugo_config_t"
 "ImpulseCentrifugoHeader" = "impulse_centrifugo_header_t"
 "ImpulseCentrifugoClient" = "impulse_centrifugo_client_t"
+"ImpulseCentrifugoEndpoint" = "impulse_centrifugo_endpoint_t"
+"ImpulseCentrifugoResult" = "impulse_centrifugo_result_t"
+"ImpulseCentrifugoCompletion" = "impulse_centrifugo_completion_fn"
+"ImpulseCentrifugoRpcRequest" = "impulse_centrifugo_rpc_request_t"
+"ImpulseCentrifugoPoolConfig" = "impulse_centrifugo_pool_config_t"
+"ImpulseCentrifugoPool" = "impulse_centrifugo_pool_t"
+"ImpulseCentrifugoEventKind" = "impulse_centrifugo_event_kind"
+"ImpulseCentrifugoEvent" = "impulse_centrifugo_event_t"
+"ImpulseCentrifugoEventCallback" = "impulse_centrifugo_event_fn"
 
 [enum]
 prefix_with_name = true

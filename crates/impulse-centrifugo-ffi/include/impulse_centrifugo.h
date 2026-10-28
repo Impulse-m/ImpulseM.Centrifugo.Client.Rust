@@ -15,6 +15,42 @@
 #define IMPULSE_CENTRIFUGO_ABI_VERSION 1
 
 /**
+ * Kinds of [`ImpulseCentrifugoEvent`].
+ */
+enum impulse_centrifugo_event_kind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * The client connected. `text` is the client id the server assigned.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_CONNECTED = 1,
+  /**
+   * The client disconnected and will not reconnect by itself. `code` and
+   * `text` are the disconnect code and reason.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_DISCONNECTED = 2,
+  /**
+   * A publication in a server-side subscription. `channel` and `data` are set.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_PUBLICATION = 3,
+  /**
+   * A background client error. `code` is the error kind (1 transport, 2 connect
+   * token, 3 connect, 4 refresh, 5 configuration, 6 protocol, 7 delta, 8 handler
+   * panic, 0 other) and `text` is the message.
+   */
+  IMPULSE_CENTRIFUGO_EVENT_KIND_ERROR = 4,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum impulse_centrifugo_event_kind impulse_centrifugo_event_kind;
+#else
+typedef int32_t impulse_centrifugo_event_kind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * Status of every exported function. Zero is success, positive values are the
  * client error codes shared with the Java and Swift SDKs, negative values are
  * ABI errors.
@@ -64,6 +100,16 @@ enum impulse_centrifugo_status
    */
   IMPULSE_CENTRIFUGO_STATUS_CONFIGURATION_ERROR = 12,
   /**
+   * No reply came within the call's deadline, or the connection did not come
+   * up in time for the call. The other SDKs carry no number for it.
+   */
+  IMPULSE_CENTRIFUGO_STATUS_TIMEOUT = 13,
+  /**
+   * The main client is not connected, so a pool call cannot run. The other
+   * SDKs carry no number for it.
+   */
+  IMPULSE_CENTRIFUGO_STATUS_CLIENT_DISCONNECTED = 14,
+  /**
    * The connection cannot carry what the call asks for.
    */
   IMPULSE_CENTRIFUGO_STATUS_UNSUPPORTED = 15,
@@ -93,6 +139,11 @@ typedef int32_t impulse_centrifugo_status;
  * `impulse_centrifugo_client_destroy`.
  */
 typedef struct impulse_centrifugo_client_t impulse_centrifugo_client_t;
+
+/**
+ * An rpc pool over one client. Free it with `impulse_centrifugo_pool_destroy`.
+ */
+typedef struct impulse_centrifugo_pool_t impulse_centrifugo_pool_t;
 
 /**
  * One HTTP header sent on the WebSocket upgrade. Both strings are NUL-terminated
@@ -172,6 +223,229 @@ typedef struct impulse_centrifugo_config_t {
   uint32_t max_pending_rpc;
 } impulse_centrifugo_config_t;
 
+/**
+ * One client event. Every pointer is borrowed for the duration of the callback
+ * only; copy what is kept. Fields that a kind does not use are empty or null.
+ */
+typedef struct impulse_centrifugo_event_t {
+  /**
+   * What happened.
+   */
+  impulse_centrifugo_event_kind kind;
+  /**
+   * The disconnect code or the error kind, zero otherwise.
+   */
+  uint32_t code;
+  /**
+   * The client id, the disconnect reason or the error message.
+   */
+  const char *text;
+  /**
+   * Length of `text` in bytes.
+   */
+  uintptr_t text_len;
+  /**
+   * The channel of a publication, or null.
+   */
+  const char *channel;
+  /**
+   * Length of `channel` in bytes.
+   */
+  uintptr_t channel_len;
+  /**
+   * The payload of a publication, or null.
+   */
+  const uint8_t *data;
+  /**
+   * Length of `data` in bytes.
+   */
+  uintptr_t data_len;
+} impulse_centrifugo_event_t;
+
+/**
+ * The outcome of a call, as its completion callback receives it. The pointers
+ * are borrowed for the duration of the callback only; copy what is kept.
+ */
+typedef struct impulse_centrifugo_result_t {
+  /**
+   * Zero on success. Otherwise the failure: a server error code (positive,
+   * 100 and up), or one of the client codes of `ImpulseCentrifugoStatus`.
+   */
+  int32_t status;
+  /**
+   * The application error code the server attached, zero when none.
+   */
+  int32_t app_code;
+  /**
+   * The application error type the server attached, or null when none.
+   */
+  const char *app_type;
+  /**
+   * Length of `app_type` in bytes.
+   */
+  uintptr_t app_type_len;
+  /**
+   * A description of the failure, or null on success.
+   */
+  const char *message;
+  /**
+   * Length of `message` in bytes.
+   */
+  uintptr_t message_len;
+  /**
+   * The reply payload, or null on failure.
+   */
+  const uint8_t *data;
+  /**
+   * Length of `data` in bytes.
+   */
+  uintptr_t data_len;
+} impulse_centrifugo_result_t;
+
+/**
+ * A request of the rpc functions. Everything is copied before the start call
+ * returns, so the caller may free it then. `on_done` may be null, in which case
+ * the call runs without a callback.
+ */
+typedef struct impulse_centrifugo_rpc_request_t {
+  /**
+   * The method name, NUL-terminated. Required.
+   */
+  const char *method;
+  /**
+   * The payload bytes; may be null when `data_len` is zero.
+   */
+  const uint8_t *data;
+  /**
+   * Length of `data` in bytes.
+   */
+  uintptr_t data_len;
+  /**
+   * Headers of the call; may be null when `header_count` is zero.
+   */
+  const struct impulse_centrifugo_header_t *headers;
+  /**
+   * Number of entries in `headers`.
+   */
+  uintptr_t header_count;
+  /**
+   * Deadline of the call in milliseconds. Zero selects the client's timeout.
+   */
+  uint32_t timeout_ms;
+  /**
+   * Completion callback, or null for none.
+   */
+  void (*on_done)(void *user, const struct impulse_centrifugo_result_t *result);
+  /**
+   * Passed back to `on_done`.
+   */
+  void *user;
+} impulse_centrifugo_rpc_request_t;
+
+/**
+ * Endpoint key, in a pool config, with the URL of one of its endpoints.
+ */
+typedef struct impulse_centrifugo_endpoint_t {
+  /**
+   * The endpoint key that calls name, for example `poolFleet`.
+   */
+  const char *key;
+  /**
+   * One URL of the key, `ws://` or `wss://`. Repeat the key for more URLs.
+   */
+  const char *url;
+} impulse_centrifugo_endpoint_t;
+
+/**
+ * Config of an rpc pool for `impulse_centrifugo_pool_create`. Strings and arrays
+ * are copied before the call returns. A zero in a numeric field selects the
+ * pool's default, and `timeout_ms` defaults to 30000.
+ */
+typedef struct impulse_centrifugo_pool_config_t {
+  /**
+   * `sizeof` the struct as the caller compiled it. It must be at least the
+   * size of this ABI's struct, and it must be the first field.
+   */
+  uintptr_t cfg_size;
+  /**
+   * The endpoints, one entry per URL; may be null when `endpoint_count` is zero.
+   */
+  const struct impulse_centrifugo_endpoint_t *endpoints;
+  /**
+   * Number of entries in `endpoints`.
+   */
+  uintptr_t endpoint_count;
+  /**
+   * Headers of each pool connection; may be null when `header_count` is zero.
+   */
+  const struct impulse_centrifugo_header_t *headers;
+  /**
+   * Number of entries in `headers`.
+   */
+  uintptr_t header_count;
+  /**
+   * Client name of each connection, or null for the pool's default.
+   */
+  const char *name;
+  /**
+   * Client version of each connection, or null for none.
+   */
+  const char *version;
+  /**
+   * Deadline of a call and the reply timeout of each connection, in milliseconds.
+   */
+  uint32_t timeout_ms;
+  /**
+   * Minimum hold of an endpoint after a connection ended for good, in milliseconds.
+   */
+  uint32_t min_reconnect_ms;
+  /**
+   * Maximum of that hold, in milliseconds.
+   */
+  uint32_t max_reconnect_ms;
+  /**
+   * Slack on top of the server ping interval, in milliseconds.
+   */
+  uint32_t max_server_ping_delay_ms;
+  /**
+   * Connections opened per endpoint URL at most.
+   */
+  uint32_t max_connections_per_endpoint;
+  /**
+   * Calls in flight per connection at most.
+   */
+  uint32_t max_inflight_per_connection;
+  /**
+   * Calls waiting for a connection at most, over all keys.
+   */
+  uint32_t max_queued;
+  /**
+   * How long a connection without calls stays open, in milliseconds.
+   */
+  uint32_t idle_timeout_ms;
+  /**
+   * Resends of one call at most.
+   */
+  uint32_t retries;
+  /**
+   * Non-zero lends each connection the main client's confirmed token.
+   */
+  uint8_t token_from;
+} impulse_centrifugo_pool_config_t;
+
+/**
+ * Called once with the outcome of a call. `user` is the pointer given with the
+ * request.
+ */
+typedef void (*impulse_centrifugo_completion_fn)(void *user,
+                                                 const struct impulse_centrifugo_result_t *result);
+
+/**
+ * Called for every client event. `user` is the pointer given with the callback.
+ */
+typedef void (*impulse_centrifugo_event_fn)(void *user,
+                                            const struct impulse_centrifugo_event_t *event);
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -219,9 +493,10 @@ int32_t impulse_centrifugo_client_disconnect(const struct impulse_centrifugo_cli
 
 /**
  * Closes the client and frees the handle. When called from a thread outside
- * the client's runtime, it waits until the close completes and the runtime has
- * stopped, after which no callbacks fire. Called from a runtime thread, it
- * starts the close and stops the runtime without waiting.
+ * the client's runtime, it waits until the close completes, until every rpc and
+ * publish callback has run, and until the runtime has stopped, after which no
+ * callbacks fire. Called from a runtime thread, it starts the close and stops
+ * the runtime without waiting. Destroy the rpc pools of the client first.
  *
  * # Safety
  *
@@ -229,6 +504,120 @@ int32_t impulse_centrifugo_client_disconnect(const struct impulse_centrifugo_cli
  * not been destroyed. No other call may use the handle during or after this one.
  */
 int32_t impulse_centrifugo_client_destroy(struct impulse_centrifugo_client_t *client);
+
+/**
+ * Sets the callback that receives the events of the client. It replaces the one
+ * set before. The callback runs on a runtime thread and must not block, nor call
+ * into the same client.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`.
+ * `callback` must be non-null, and `user` must stay valid until the client is
+ * destroyed or another callback replaces this one.
+ */
+int32_t impulse_centrifugo_client_set_event_callback(const struct impulse_centrifugo_client_t *client,
+                                                     void (*callback)(void *user,
+                                                                      const struct impulse_centrifugo_event_t *event),
+                                                     void *user);
+
+/**
+ * Starts a rpc call on the main client. The call is sent once the connection is
+ * up, and its completion runs once with the reply or the failure. The call id is
+ * written to `out_call_id` (when not null) for `impulse_centrifugo_rpc_cancel`.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`.
+ * `request` must be readable, with the pointers its documentation names valid
+ * for the call. `out_call_id` must be null or writable.
+ */
+int32_t impulse_centrifugo_rpc(const struct impulse_centrifugo_client_t *client,
+                               const struct impulse_centrifugo_rpc_request_t *request,
+                               uint64_t *out_call_id);
+
+/**
+ * Cancels a rpc call of the main client. A call not sent yet fails at once with
+ * status 17, and a sent call also gets a cancel command for the server. Its
+ * completion still runs once. An unknown or finished call id does nothing.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`.
+ */
+int32_t impulse_centrifugo_rpc_cancel(const struct impulse_centrifugo_client_t *client,
+                                      uint64_t call_id);
+
+/**
+ * Builds a pool over the main client from `cfg`. The pool's connections run on
+ * the client's runtime, so the pool must be destroyed before the client. On any
+ * status other than success `*out` is null.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`. `cfg`
+ * must be readable, with its first field its size and its pointers valid for the
+ * call. `out` must be writable.
+ */
+int32_t impulse_centrifugo_pool_create(const struct impulse_centrifugo_client_t *client,
+                                       const struct impulse_centrifugo_pool_config_t *cfg,
+                                       struct impulse_centrifugo_pool_t **out);
+
+/**
+ * Starts a call on the pool, by endpoint key. The completion runs once with the
+ * reply or the failure. The call id is written to `out_call_id` (when not null)
+ * for `impulse_centrifugo_pool_rpc_cancel`.
+ *
+ * # Safety
+ *
+ * `pool` must be a live handle from `impulse_centrifugo_pool_create`. `key` must
+ * be a NUL-terminated string. `request` must be readable, with the pointers its
+ * documentation names valid for the call. `out_call_id` must be null or writable.
+ */
+int32_t impulse_centrifugo_pool_rpc(const struct impulse_centrifugo_pool_t *pool,
+                                    const char *key,
+                                    const struct impulse_centrifugo_rpc_request_t *request,
+                                    uint64_t *out_call_id);
+
+/**
+ * Cancels a pool call. A call waiting for a connection fails at once with status
+ * 17. Its completion still runs once. An unknown or finished call id does nothing.
+ *
+ * # Safety
+ *
+ * `pool` must be a live handle from `impulse_centrifugo_pool_create`.
+ */
+int32_t impulse_centrifugo_pool_rpc_cancel(const struct impulse_centrifugo_pool_t *pool,
+                                           uint64_t call_id);
+
+/**
+ * Closes the pool and frees its handle. Waiting calls fail with status 17 and
+ * calls in flight with status 11, and their completions still run.
+ *
+ * # Safety
+ *
+ * `pool` must be a handle from `impulse_centrifugo_pool_create` that has not been
+ * destroyed. No other call may use the handle during or after this one.
+ */
+int32_t impulse_centrifugo_pool_destroy(struct impulse_centrifugo_pool_t *pool);
+
+/**
+ * Publishes `data` into `channel` through the main client, with no subscription.
+ * The completion runs once with the outcome; its `data` is empty.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create`. `channel`
+ * must be a NUL-terminated string. `data` must be valid for `data_len` bytes.
+ * `user` must stay valid until the completion has run.
+ */
+int32_t impulse_centrifugo_publish(const struct impulse_centrifugo_client_t *client,
+                                   const char *channel,
+                                   const uint8_t *data,
+                                   uintptr_t data_len,
+                                   void (*on_done)(void *user,
+                                                   const struct impulse_centrifugo_result_t *result),
+                                   void *user);
 
 #ifdef __cplusplus
 }  // extern "C"

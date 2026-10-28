@@ -899,6 +899,7 @@ name = "impulse-centrifugo-ffi"
 version = "0.1.0"
 dependencies = [
  "centrifuge-client",
+ "centrifuge-fake-server",
  "http",
  "tokio",
  "url",

@@ -8,18 +8,35 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_void};
 use std::future::Future;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::ptr;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use centrifuge::{Client, ClientBuilder, ProxyConfig};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use tokio::runtime::{Builder, Handle, Runtime};
 use url::Url;
+
+mod events;
+mod rpc;
+
+pub use events::{
+    ImpulseCentrifugoEvent, ImpulseCentrifugoEventCallback, ImpulseCentrifugoEventKind,
+    impulse_centrifugo_client_set_event_callback,
+};
+use rpc::CallRegistry;
+pub use rpc::{
+    ImpulseCentrifugoCompletion, ImpulseCentrifugoEndpoint, ImpulseCentrifugoPool,
+    ImpulseCentrifugoPoolConfig, ImpulseCentrifugoResult, ImpulseCentrifugoRpcRequest,
+    impulse_centrifugo_pool_create, impulse_centrifugo_pool_destroy, impulse_centrifugo_pool_rpc,
+    impulse_centrifugo_pool_rpc_cancel, impulse_centrifugo_publish, impulse_centrifugo_rpc,
+    impulse_centrifugo_rpc_cancel,
+};
 
 /// Version of this C ABI. Bumped when a signature, a struct layout or a status
 /// value changes. The C++ side compares it with the header macro at startup.
@@ -71,6 +88,12 @@ pub enum ImpulseCentrifugoStatus {
     /// The configuration cannot work: an invalid instance, endpoint, proxy URL,
     /// header or `max_pending_rpc`.
     ConfigurationError = 12,
+    /// No reply came within the call's deadline, or the connection did not come
+    /// up in time for the call. The other SDKs carry no number for it.
+    Timeout = 13,
+    /// The main client is not connected, so a pool call cannot run. The other
+    /// SDKs carry no number for it.
+    ClientDisconnected = 14,
     /// The connection cannot carry what the call asks for.
     Unsupported = 15,
     /// The call hit a limit, such as `max_pending_rpc`.
@@ -137,7 +160,23 @@ pub struct ImpulseCentrifugoConfig {
 pub struct ImpulseCentrifugoClient {
     runtime: Runtime,
     client: Client,
+    calls: Arc<CallRegistry>,
+    /// The call registries of the pools built on this client, so that destroy
+    /// waits for the calls of pools that were destroyed before it.
+    pool_calls: Mutex<Vec<Weak<CallRegistry>>>,
 }
+
+/// A caller's user pointer, moved to the runtime threads that run its callback.
+/// The caller keeps the pointee valid until the callback it was given to has run.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UserData(pub(crate) *mut c_void);
+
+// SAFETY: the caller's contract keeps the pointee valid and usable from any thread
+// until the callback that receives it has run.
+unsafe impl Send for UserData {}
+
+// SAFETY: as for `Send`; the pointer is only handed back to the caller's callback.
+unsafe impl Sync for UserData {}
 
 /// Runs `body` and turns a panic into [`ImpulseCentrifugoStatus::Panic`].
 fn guarded<F>(body: F) -> i32
@@ -282,7 +321,12 @@ unsafe fn build_client(
         runtime.shutdown_background();
         return Err(ImpulseCentrifugoStatus::ConfigurationError);
     };
-    Ok(ImpulseCentrifugoClient { runtime, client })
+    Ok(ImpulseCentrifugoClient {
+        runtime,
+        client,
+        calls: Arc::new(CallRegistry::default()),
+        pool_calls: Mutex::new(Vec::new()),
+    })
 }
 
 /// The ABI version of this library, the value of `IMPULSE_CENTRIFUGO_ABI_VERSION`.
@@ -378,9 +422,10 @@ pub unsafe extern "C" fn impulse_centrifugo_client_disconnect(
 }
 
 /// Closes the client and frees the handle. When called from a thread outside
-/// the client's runtime, it waits until the close completes and the runtime has
-/// stopped, after which no callbacks fire. Called from a runtime thread, it
-/// starts the close and stops the runtime without waiting.
+/// the client's runtime, it waits until the close completes, until every rpc and
+/// publish callback has run, and until the runtime has stopped, after which no
+/// callbacks fire. Called from a runtime thread, it starts the close and stops
+/// the runtime without waiting. Destroy the rpc pools of the client first.
 ///
 /// # Safety
 ///
@@ -396,14 +441,31 @@ pub unsafe extern "C" fn impulse_centrifugo_client_destroy(
         }
         // SAFETY: a non-null handle from create, not yet destroyed, by the caller's contract.
         let handle: Box<ImpulseCentrifugoClient> = unsafe { Box::from_raw(client) };
-        let ImpulseCentrifugoClient { runtime, client }: ImpulseCentrifugoClient = *handle;
+        let ImpulseCentrifugoClient {
+            runtime,
+            client,
+            calls,
+            pool_calls,
+        }: ImpulseCentrifugoClient = *handle;
         let closing: Pin<Box<dyn Future<Output = ()> + Send + 'static>> = Box::pin(client.close());
         if Handle::try_current().is_ok() {
             drop(closing);
             drop(client);
             runtime.shutdown_background();
         } else {
-            runtime.block_on(closing);
+            let pool_registries: Vec<Weak<CallRegistry>> = pool_calls
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner);
+            runtime.block_on(async move {
+                closing.await;
+                calls.drain().await;
+                for registry in pool_registries
+                    .iter()
+                    .filter_map(|registry: &Weak<CallRegistry>| registry.upgrade())
+                {
+                    registry.drain().await;
+                }
+            });
             drop(client);
             drop(runtime);
         }
