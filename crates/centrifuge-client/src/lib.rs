@@ -96,7 +96,9 @@ pub use events::{
     UnsubscribedEvent,
 };
 pub use maybe_send::{MaybeSend, MaybeSync};
-pub use pool::{RpcPool, RpcPoolCallOptions, RpcPoolOptions, RpcPoolStats};
+pub use pool::{
+    RpcPool, RpcPoolCallOptions, RpcPoolOptions, RpcPoolOutcome, RpcPoolRedirect, RpcPoolStats,
+};
 pub use rpc_call::{RpcCall, RpcOptions};
 pub use stats::Statistics;
 pub use stream::EventStream;

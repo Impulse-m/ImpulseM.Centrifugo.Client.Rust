@@ -4,6 +4,7 @@
 //! Keys that resolve to the same URL share its endpoint. The pool's logic
 //! lives in the parent module; this file holds the state only.
 
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::client::Client;
@@ -23,6 +24,8 @@ pub(crate) struct Connection {
     /// The last moment a call took or gave back a slot. The idle span counts
     /// from it.
     pub(crate) last_use: Instant,
+    /// The disconnect code the connection ended with for good, once it has.
+    pub(crate) ends: watch::Receiver<Option<u32>>,
 }
 
 /// One endpoint URL of the pool, with its connections and its hold.

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use super::PoolInner;
 use crate::client::Client;
@@ -24,10 +24,24 @@ pub(crate) struct Placement {
     pub(crate) url: String,
     /// The connection within its endpoint.
     pub(crate) connection_id: u64,
+    /// The disconnect code the connection ended with for good, once it has.
+    pub(crate) ends: watch::Receiver<Option<u32>>,
 }
 
 /// What a waiting call receives: its slot, or the error that fails it.
 pub(crate) type SlotResult = Result<Placement, Error>;
+
+/// Where a call joins the line of its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Join {
+    /// A fresh call: at the back, while `max_queued` allows.
+    Fresh,
+    /// A resend after a later signal or a lost connection: at the back, and
+    /// not limited by `max_queued`.
+    Resend,
+    /// A reroute move: at the front, and not limited by `max_queued`.
+    Front,
+}
 
 /// A call waiting in a line.
 #[derive(Debug)]

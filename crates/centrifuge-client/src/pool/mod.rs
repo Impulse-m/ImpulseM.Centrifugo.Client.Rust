@@ -8,11 +8,17 @@
 //! ends for good holds its endpoint for a backoff, and a connection with no
 //! calls closes after `idle_timeout`.
 //!
+//! A call lost with its connection, a server error that asks for a later
+//! resend, and a server error that the reroute hook moves to another key are
+//! resent while `retries` and the call's deadline allow. The redirect hook
+//! may turn the outcome of a call into bytes that the pool fetches from a URL,
+//! with at most `max_redirects_inflight` fetches at once.
+//!
 //! The pool takes its settings from [`RpcPoolOptions`] and reports its state
 //! with [`RpcPool::stats`]. Calls fail with a configuration error for the
 //! options that cannot work, with [`Error::ClientDisconnected`] while the main
-//! client is not connected, with code 16 when the line is full, and with
-//! [`Error::Timeout`] at their deadline.
+//! client is not connected, with code 16 when a fresh call finds the line
+//! full, and with [`Error::Timeout`] at their deadline.
 
 mod endpoint;
 mod options;
@@ -25,20 +31,25 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use http::HeaderMap;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
 pub use options::{RpcPoolCallOptions, RpcPoolOptions, RpcPoolStats};
+pub use redirect::{RpcPoolOutcome, RpcPoolRedirect};
 
 use endpoint::{Connection, Endpoint};
-use options::{validate, validate_call};
-use queue::{Admission, Placement, SlotResult, Waiter};
+use options::{RerouteFn, validate, validate_call};
+use queue::{Admission, Join, Placement, SlotResult, Waiter};
+use redirect::{RedirectGate, allowed_redirect_url, fetch, fetched_result, redirect_failed};
+use retry::{draw, is_server_reply, later_delay, may_resend, wants_later};
 
-use crate::client::Client;
+use crate::client::{Client, ClientBuilder, ConnectionTokenContext};
+use crate::codes::disconnected;
 use crate::error::Error;
 use crate::rpc_tracker::{CODE_CANCELLED, CODE_LIMIT_EXCEEDED, local_error};
 use crate::shared::lock;
-use crate::{Bytes, ConnectedEvent, DisconnectedEvent, RpcOptions, RpcResult, State};
+use crate::transport::net::Net;
+use crate::{Bytes, ConnectedEvent, DisconnectedEvent, RpcOptions, RpcResult, ServerError, State};
 
 /// Calls by endpoint key over the connections of one main client's pool.
 ///
@@ -71,8 +82,15 @@ impl RpcPool {
     /// is no Tokio runtime.
     pub fn new(main: &Client, options: RpcPoolOptions) -> Result<Self, Error> {
         let headers: HeaderMap = validate(&options)?;
+        if options.token_from {
+            return Err(Error::Configuration(
+                "token_from needs a confirmed token the client does not expose yet".into(),
+            ));
+        }
         let runtime: tokio::runtime::Handle = tokio::runtime::Handle::try_current()
             .map_err(|_| Error::Configuration("the rpc pool needs a Tokio runtime".into()))?;
+        let redirects: RedirectGate = RedirectGate::new(options.max_redirects_inflight);
+        let (close_tx, _): (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
         Ok(Self {
             inner: Arc::new(PoolInner {
                 main: main.clone(),
@@ -80,6 +98,8 @@ impl RpcPool {
                 headers,
                 runtime,
                 state: Mutex::new(PoolState::default()),
+                redirects,
+                close_tx,
             }),
         })
     }
@@ -108,37 +128,51 @@ impl RpcPool {
         self.inner.check_open()?;
         let timeout: Duration = validate_call(&options, &self.inner.options)?;
         let deadline: Instant = Instant::now() + timeout;
-        let urls: Vec<String> = self.inner.resolve(endpoint_key)?;
-        let mut admission: Admission = self.inner.enqueue(endpoint_key, urls)?;
-        let received: Result<SlotResult, oneshot::error::RecvError> = tokio::select! {
-            biased;
-            result = &mut admission.receiver => result,
-            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
-        };
-        let placement: Placement = match received {
-            Ok(Ok(placement)) => placement,
-            Ok(Err(error)) => return Err(error),
-            Err(_) => return Err(Error::ClientClosed),
-        };
-        admission.slot = Some(placement.clone());
-        let remaining: Duration = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(Error::Timeout);
+        let mut key: String = endpoint_key.to_owned();
+        let mut resends: usize = 0;
+        let mut later_attempts: u32 = 0;
+        let mut join: Join = Join::Fresh;
+        loop {
+            let attempt: Attempt = self
+                .inner
+                .attempt(&key, method, data.clone(), &options, deadline, join)
+                .await?;
+            let now: Instant = Instant::now();
+            if may_resend(resends, self.inner.options.retries, deadline > now) {
+                match &attempt.outcome {
+                    Err(Error::Server(error)) if is_server_reply(error) => {
+                        if let Some(next_key) = self.inner.reroute_key(error) {
+                            resends += 1;
+                            key = next_key;
+                            join = Join::Front;
+                            continue;
+                        }
+                        if wants_later(error) {
+                            let delay: Duration = later_delay(
+                                later_attempts,
+                                deadline.saturating_duration_since(now),
+                                draw(),
+                            );
+                            later_attempts += 1;
+                            resends += 1;
+                            join = Join::Resend;
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                    }
+                    Err(Error::ConnectionClosed) if !attempt.repeats_loss => {
+                        resends += 1;
+                        join = Join::Resend;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            return self
+                .inner
+                .settle_answered(attempt.outcome, &attempt.url, deadline)
+                .await;
         }
-        let call_options: RpcOptions = RpcOptions {
-            headers: self.inner.call_headers(&options),
-            timeout: Some(remaining),
-        };
-        let outcome: Result<RpcResult, Error> = placement
-            .client
-            .rpc_call(method, data, call_options)
-            .wait()
-            .await;
-        drop(admission);
-        outcome.map_err(|error: Error| match error {
-            Error::ClientClosed => Error::ConnectionClosed,
-            other => other,
-        })
     }
 
     /// The state of the pool: its connections, the calls in flight and the
@@ -169,6 +203,56 @@ struct PoolInner {
     runtime: tokio::runtime::Handle,
     /// Everything that changes with the calls and the connections.
     state: Mutex<PoolState>,
+    /// The slots of the redirect fetches.
+    redirects: RedirectGate,
+    /// Set to `true` when the pool closes, to end the redirect fetches in
+    /// progress.
+    close_tx: watch::Sender<bool>,
+}
+
+/// The answer of one attempt of a call: its outcome on its connection, and the
+/// endpoint URL of the connection.
+#[derive(Debug)]
+struct Attempt {
+    /// The outcome of the call on its connection.
+    outcome: Result<RpcResult, Error>,
+    /// The endpoint URL of the connection that carried the call.
+    url: String,
+    /// Whether the connection ended for good with a message-size or an
+    /// unauthorized close. A call it lost settles with `connectionClosed`
+    /// and is not resent.
+    repeats_loss: bool,
+}
+
+/// A redirect fetch's place in the pool's count: waiting for a slot, then
+/// holding one. Dropping it leaves the count, however the fetch ends.
+#[derive(Debug)]
+struct FetchTurn {
+    /// The pool whose count the turn is in.
+    pool: Arc<PoolInner>,
+    /// Whether the fetch holds a slot, rather than waiting for one.
+    holds_slot: bool,
+}
+
+impl FetchTurn {
+    /// Moves the fetch from the waiting count to the running count.
+    fn take_slot(&mut self) {
+        let mut state: MutexGuard<'_, PoolState> = lock(&self.pool.state);
+        state.redirects_waiting = state.redirects_waiting.saturating_sub(1);
+        state.redirects_running += 1;
+        self.holds_slot = true;
+    }
+}
+
+impl Drop for FetchTurn {
+    fn drop(&mut self) {
+        let mut state: MutexGuard<'_, PoolState> = lock(&self.pool.state);
+        if self.holds_slot {
+            state.redirects_running = state.redirects_running.saturating_sub(1);
+        } else {
+            state.redirects_waiting = state.redirects_waiting.saturating_sub(1);
+        }
+    }
 }
 
 /// The state under the pool's lock.
@@ -184,6 +268,10 @@ struct PoolState {
     endpoints: HashMap<String, Endpoint>,
     /// The waiting calls of each key, in admission order.
     lines: HashMap<String, VecDeque<Waiter>>,
+    /// Redirect fetches holding a slot.
+    redirects_running: usize,
+    /// Redirect fetches waiting for a slot.
+    redirects_waiting: usize,
 }
 
 impl PoolState {
@@ -202,7 +290,8 @@ impl PoolState {
     /// The stats of the pool.
     fn stats(&self) -> RpcPoolStats {
         let mut stats: RpcPoolStats = RpcPoolStats {
-            queued: self.queued(),
+            queued: self.queued() + self.redirects_waiting,
+            redirects: self.redirects_running,
             ..Default::default()
         };
         for endpoint in self.endpoints.values() {
@@ -274,6 +363,7 @@ impl PoolState {
             client: connection.client.clone(),
             url: url.to_owned(),
             connection_id: id,
+            ends: connection.ends.clone(),
         })
     }
 
@@ -297,6 +387,161 @@ impl PoolState {
 }
 
 impl PoolInner {
+    /// One attempt of a call: it takes a slot of its key, runs on the slot's
+    /// connection, and gives the slot back. Admission errors (a timeout, a
+    /// closed pool, a key with no endpoint) are returned as they are.
+    async fn attempt(
+        self: &Arc<Self>,
+        key: &str,
+        method: &str,
+        data: Bytes,
+        options: &RpcPoolCallOptions,
+        deadline: Instant,
+        join: Join,
+    ) -> Result<Attempt, Error> {
+        let urls: Vec<String> = self.resolve(key)?;
+        let mut admission: Admission = self.enqueue(key, urls, join)?;
+        let received: Result<SlotResult, oneshot::error::RecvError> = tokio::select! {
+            biased;
+            result = &mut admission.receiver => result,
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+        };
+        let placement: Placement = match received {
+            Ok(Ok(placement)) => placement,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(Error::ClientClosed),
+        };
+        admission.slot = Some(placement.clone());
+        let remaining: Duration = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::Timeout);
+        }
+        let call_options: RpcOptions = RpcOptions {
+            headers: self.call_headers(options),
+            timeout: Some(remaining),
+        };
+        let outcome: Result<RpcResult, Error> = placement
+            .client
+            .rpc_call(method, data, call_options)
+            .wait()
+            .await
+            .map_err(|error: Error| match error {
+                Error::ClientClosed => Error::ConnectionClosed,
+                other => other,
+            });
+        drop(admission);
+        // The disconnect handler runs before the core fails the calls of a
+        // connection that ends for good, so its code is set by now.
+        let ended_code: Option<u32> = *placement.ends.borrow();
+        let repeats_loss: bool = matches!(
+            ended_code,
+            Some(code) if code == disconnected::MESSAGE_SIZE_LIMIT
+                || code == disconnected::UNAUTHORIZED
+        );
+        Ok(Attempt {
+            outcome,
+            url: placement.url,
+            repeats_loss,
+        })
+    }
+
+    /// The endpoint key that a server error moves its call to, from the
+    /// reroute hook. `None` when there is no hook, or it keeps the key.
+    fn reroute_key(&self, error: &ServerError) -> Option<String> {
+        let hook: &Arc<dyn RerouteFn> = self.options.reroute.as_ref()?;
+        (hook.as_ref())(error)
+    }
+
+    /// Settles a call that reached a connection. The redirect hook sees the
+    /// outcome first: a redirect starts its fetch instead of the outcome. A
+    /// timeout and a cancel are the pool's own outcomes, and settle at once.
+    async fn settle_answered(
+        self: &Arc<Self>,
+        outcome: Result<RpcResult, Error>,
+        url: &str,
+        deadline: Instant,
+    ) -> Result<RpcResult, Error> {
+        let Some(hook) = self.options.redirect.clone() else {
+            return outcome;
+        };
+        if lock(&self.state).closed {
+            return outcome;
+        }
+        let view: RpcPoolOutcome = match outcome {
+            Ok(reply) => RpcPoolOutcome::Reply(reply),
+            Err(error) => {
+                if is_pool_local(&error) {
+                    return Err(error);
+                }
+                RpcPoolOutcome::Error(error)
+            }
+        };
+        match (hook.as_ref())(&view) {
+            Some(redirect) => self.fetch_redirect(redirect, url, deadline).await,
+            None => match view {
+                RpcPoolOutcome::Reply(reply) => Ok(reply),
+                RpcPoolOutcome::Error(error) => Err(error),
+            },
+        }
+    }
+
+    /// Fetches the bytes of a redirect for a call, in a slot of the pool's
+    /// redirect gate. The URL is checked first, with no request for a refused
+    /// one. The fetch ends at the call's deadline, or when the pool closes.
+    async fn fetch_redirect(
+        self: &Arc<Self>,
+        redirect: RpcPoolRedirect,
+        endpoint_url: &str,
+        deadline: Instant,
+    ) -> Result<RpcResult, Error> {
+        let Some(target) = allowed_redirect_url(&redirect.url, endpoint_url) else {
+            return Err(redirect_failed(
+                "redirect URL is not allowed for the endpoint",
+            ));
+        };
+        let max_bytes: usize = redirect
+            .max_bytes
+            .unwrap_or(self.options.max_redirect_bytes);
+        let mut turn: FetchTurn = self.take_fetch_turn()?;
+        let mut closed: watch::Receiver<bool> = self.close_tx.subscribe();
+        let permit: tokio::sync::OwnedSemaphorePermit = tokio::select! {
+            biased;
+            _ = closed.wait_for(|value: &bool| *value) => return Err(Error::ConnectionClosed),
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+            acquired = self.redirects.acquire() => acquired?,
+        };
+        turn.take_slot();
+        let net: Arc<Net> = Arc::clone(&self.main.shared().net);
+        let fetched: Result<Bytes, &'static str> = tokio::select! {
+            biased;
+            _ = closed.wait_for(|value: &bool| *value) => return Err(Error::ConnectionClosed),
+            () = tokio::time::sleep_until(deadline) => return Err(Error::Timeout),
+            body = fetch(&net, &target, &redirect.headers, max_bytes) => body,
+        };
+        drop(permit);
+        fetched
+            .map(fetched_result)
+            .map_err(|message: &'static str| redirect_failed(message))
+    }
+
+    /// Takes a place in the redirect count, or refuses it with code 16 when
+    /// every fetch slot is held and the lines and the redirect waits fill
+    /// `max_queued`.
+    fn take_fetch_turn(self: &Arc<Self>) -> Result<FetchTurn, Error> {
+        let mut state: MutexGuard<'_, PoolState> = lock(&self.state);
+        let limit: usize = self.options.max_redirects_inflight;
+        if state.redirects_running >= limit
+            && state.queued() + state.redirects_waiting >= self.options.max_queued
+        {
+            return Err(local_error(CODE_LIMIT_EXCEEDED, "limit exceeded"));
+        }
+        state.redirects_waiting += 1;
+        Ok(FetchTurn {
+            pool: Arc::clone(self),
+            holds_slot: false,
+        })
+    }
+
     /// Refuses a call while the pool is closed or the main client is not
     /// connected. A call that finds the main client closed also ends the idle
     /// connections, when `close_ended_session` is set.
@@ -364,24 +609,35 @@ impl PoolInner {
     }
 
     /// Puts a call in the line of its key, and places it when a slot is free.
-    /// Fails with code 16 when the line is full and no connection can open.
-    fn enqueue(self: &Arc<Self>, key: &str, urls: Vec<String>) -> Result<Admission, Error> {
+    /// A fresh call joins the back of the line, and fails with code 16 when
+    /// the line is full and no connection can open. A resend joins the back
+    /// of the line unchecked, and a reroute move joins the front; neither is
+    /// limited by `max_queued`.
+    fn enqueue(
+        self: &Arc<Self>,
+        key: &str,
+        urls: Vec<String>,
+        join: Join,
+    ) -> Result<Admission, Error> {
         let mut state: MutexGuard<'_, PoolState> = lock(&self.state);
         if state.closed {
             return Err(Error::ClientClosed);
         }
-        if state.queued() >= self.options.max_queued && self.opener(&state, &urls).is_none() {
+        if join == Join::Fresh
+            && state.queued() >= self.options.max_queued
+            && self.opener(&state, &urls).is_none()
+        {
             return Err(local_error(CODE_LIMIT_EXCEEDED, "limit exceeded"));
         }
         let id: u64 = state.take_id();
         let (sender, receiver): (oneshot::Sender<SlotResult>, oneshot::Receiver<SlotResult>) =
             oneshot::channel();
         state.keys.entry(key.to_owned()).or_insert(urls);
-        state
-            .lines
-            .entry(key.to_owned())
-            .or_default()
-            .push_back(Waiter { id, sender });
+        let line: &mut VecDeque<Waiter> = state.lines.entry(key.to_owned()).or_default();
+        match join {
+            Join::Fresh | Join::Resend => line.push_back(Waiter { id, sender }),
+            Join::Front => line.push_front(Waiter { id, sender }),
+        }
         self.drain_key(&mut state, key);
         Ok(Admission {
             pool: Arc::clone(self),
@@ -469,7 +725,9 @@ impl PoolInner {
     /// pool, and it takes calls once it has connected.
     fn open_connection(self: &Arc<Self>, state: &mut PoolState, url: &str) -> Result<(), Error> {
         let id: u64 = state.take_id();
-        let client: Client = self.build_client(url, id)?;
+        let (ends_tx, ends): (watch::Sender<Option<u32>>, watch::Receiver<Option<u32>>) =
+            watch::channel(None);
+        let client: Client = self.build_client(url, id, ends_tx)?;
         client.connect()?;
         let endpoint: &mut Endpoint = state
             .endpoints
@@ -482,6 +740,7 @@ impl PoolInner {
             connected: false,
             inflight: 0,
             last_use: Instant::now(),
+            ends,
         });
         if !self.options.idle_timeout.is_zero() {
             self.spawn_idle(url.to_owned(), id);
@@ -491,12 +750,17 @@ impl PoolInner {
 
     /// A client of the endpoint, with the connection settings of the pool.
     /// Its events call back into the pool while it is alive.
-    fn build_client(self: &Arc<Self>, url: &str, id: u64) -> Result<Client, Error> {
+    fn build_client(
+        self: &Arc<Self>,
+        url: &str,
+        id: u64,
+        ends: watch::Sender<Option<u32>>,
+    ) -> Result<Client, Error> {
         let connected_pool: Weak<Self> = Arc::downgrade(self);
         let ended_pool: Weak<Self> = Arc::downgrade(self);
         let connected_url: String = url.to_owned();
         let ended_url: String = url.to_owned();
-        Client::builder(url)
+        let mut builder: ClientBuilder = Client::builder(url)
             .runtime(self.runtime.clone())
             .name(self.options.name.clone())
             .version(self.options.version.clone())
@@ -510,12 +774,19 @@ impl PoolInner {
                     pool.connection_connected(&connected_url, id);
                 }
             })
-            .on_disconnected(move |_: &Client, _: DisconnectedEvent| {
+            .on_disconnected(move |_: &Client, event: DisconnectedEvent| {
+                ends.send_replace(Some(event.code));
                 if let Some(pool) = ended_pool.upgrade() {
                     pool.connection_ended(&ended_url, id);
                 }
-            })
-            .build()
+            });
+        if !self.options.token.is_empty() {
+            builder = builder.token(self.options.token.clone());
+        }
+        if let Some(getter) = self.options.token_getter.clone() {
+            builder = builder.get_token(move |ctx: ConnectionTokenContext| getter(ctx));
+        }
+        builder.build()
     }
 
     /// A connection connected: it takes calls, and its endpoint's failures
@@ -655,6 +926,7 @@ impl PoolInner {
             return;
         }
         state.closed = true;
+        self.close_tx.send_replace(true);
         let lines: Vec<VecDeque<Waiter>> = state
             .lines
             .drain()
@@ -691,4 +963,14 @@ fn hold_delay(minimum: Duration, maximum: Duration, failures: u32) -> Duration {
         .checked_mul(1_u32 << exponent)
         .unwrap_or(maximum)
         .min(maximum)
+}
+
+/// Whether an outcome is the pool's own: a timeout, or a cancel. The redirect
+/// hook does not see these.
+fn is_pool_local(error: &Error) -> bool {
+    match error {
+        Error::Timeout => true,
+        Error::Server(server) => server.code == CODE_CANCELLED,
+        _ => false,
+    }
 }

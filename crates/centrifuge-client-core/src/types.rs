@@ -281,6 +281,12 @@ pub struct ServerError {
     pub message: String,
     /// Whether retrying later may succeed.
     pub temporary: bool,
+    /// Application error code the server attached (0 when none).
+    pub app_code: i32,
+    /// Application error type the server attached (empty when none).
+    pub app_type: String,
+    /// Metadata the server attached, such as the retry signal of an rpc call.
+    pub metadata: HashMap<String, String>,
 }
 
 #[doc(hidden)] // the wire model is an implementation detail
@@ -290,6 +296,9 @@ impl From<proto::Error> for ServerError {
             code: e.code,
             message: e.message,
             temporary: e.temporary,
+            app_code: e.app_code,
+            app_type: e.app_type,
+            metadata: e.metadata,
         }
     }
 }

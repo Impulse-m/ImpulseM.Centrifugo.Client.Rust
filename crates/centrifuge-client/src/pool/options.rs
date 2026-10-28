@@ -6,22 +6,47 @@
 //! options of one call against the pool's.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use http::HeaderMap;
 use http::header::{HeaderName, HeaderValue};
 
+use super::redirect::{RpcPoolOutcome, RpcPoolRedirect};
+use crate::ServerError;
+use crate::client::ConnectionTokenContext;
 use crate::config::defaults;
 use crate::config::{MAX_DURATION, check_http_headers, duration};
-use crate::error::Error;
+use crate::driver::{ConnTokenGetter, TokenFuture};
+use crate::error::{Error, TokenError};
 use crate::maybe_send::{MaybeSend, MaybeSync};
 use crate::rpc_call::validate_timeout;
+
+/// The most redirect fetches a pool may run at once.
+pub(crate) const MAX_REDIRECTS_INFLIGHT: usize = 16;
 
 /// Maps an endpoint key to the URLs of its endpoint.
 pub(crate) trait EndpointFn: Fn(&str) -> Vec<String> + MaybeSend + MaybeSync {}
 
 impl<F: Fn(&str) -> Vec<String> + MaybeSend + MaybeSync> EndpointFn for F {}
+
+/// Maps a server error reply to the endpoint key that the call moves to.
+pub(crate) trait RerouteFn:
+    Fn(&ServerError) -> Option<String> + MaybeSend + MaybeSync
+{
+}
+
+impl<F: Fn(&ServerError) -> Option<String> + MaybeSend + MaybeSync> RerouteFn for F {}
+
+/// Maps the outcome of a call that reached a connection to the bytes the pool
+/// fetches, or to no redirect.
+pub(crate) trait RedirectFn:
+    Fn(&RpcPoolOutcome) -> Option<RpcPoolRedirect> + MaybeSend + MaybeSync
+{
+}
+
+impl<F: Fn(&RpcPoolOutcome) -> Option<RpcPoolRedirect> + MaybeSend + MaybeSync> RedirectFn for F {}
 
 /// Options of an [`RpcPool`](crate::RpcPool).
 ///
@@ -72,9 +97,37 @@ pub struct RpcPoolOptions {
     /// How long a connection without calls stays open. Zero keeps it open
     /// until the pool closes.
     pub idle_timeout: Duration,
+    /// Resends of one call at most, counted over all causes together: a call
+    /// lost with its connection, a server error that carries the later
+    /// signal, and a move by the reroute hook. Zero sends no resend.
+    pub retries: usize,
+    /// Redirect fetches in flight at most, over the pool, from 1 to 16. A
+    /// fetch that finds no free slot waits for one in arrival order.
+    pub max_redirects_inflight: usize,
+    /// Body bytes a redirect fetch accepts at most, unless its redirect gives
+    /// its own limit.
+    pub max_redirect_bytes: usize,
+    /// The token of each connection, for a pool without `token_from`. Empty
+    /// means no token. Exclusive with `token_from` and the token getter.
+    pub token: String,
+    /// Whether the connections take their token from the main client. Exclusive
+    /// with `token` and the token getter. Not supported yet: the pool refuses
+    /// it at creation until the main client exposes its confirmed token.
+    pub token_from: bool,
     /// Closes the idle connections once a call finds the main client closed,
     /// instead of at the idle timeout.
     pub close_ended_session: bool,
+    /// Maps a server error reply to an endpoint key. A reply that maps to a
+    /// key moves the call to that key, at the front of its line, while
+    /// `retries` and the call's deadline allow. Runs on server error replies
+    /// only.
+    pub(crate) reroute: Option<Arc<dyn RerouteFn>>,
+    /// Maps the outcome of a call that reached a connection to the bytes the
+    /// pool fetches. Runs on a reply or on an error the call failed with on
+    /// its connection, never on a timeout, a cancel or a close.
+    pub(crate) redirect: Option<Arc<dyn RedirectFn>>,
+    /// The token getter of each connection, for a pool without `token_from`.
+    pub(crate) token_getter: Option<ConnTokenGetter>,
 }
 
 impl RpcPoolOptions {
@@ -94,8 +147,52 @@ impl RpcPoolOptions {
             max_inflight_per_connection: 1,
             max_queued: 64,
             idle_timeout: Duration::from_secs(60),
+            retries: 3,
+            max_redirects_inflight: 4,
+            max_redirect_bytes: 16 * 1024 * 1024,
+            token: String::new(),
+            token_from: false,
             close_ended_session: true,
+            reroute: None,
+            redirect: None,
+            token_getter: None,
         }
+    }
+
+    /// Sets the reroute hook: it maps a server error reply to the endpoint key
+    /// that the call moves to, or to `None` for no move.
+    #[must_use]
+    pub fn reroute(
+        mut self,
+        hook: impl Fn(&ServerError) -> Option<String> + MaybeSend + MaybeSync + 'static,
+    ) -> Self {
+        self.reroute = Some(Arc::new(hook));
+        self
+    }
+
+    /// Sets the redirect hook: it maps the outcome of a call that reached a
+    /// connection to the bytes the pool fetches, or to `None` for no redirect.
+    #[must_use]
+    pub fn redirect(
+        mut self,
+        hook: impl Fn(&RpcPoolOutcome) -> Option<RpcPoolRedirect> + MaybeSend + MaybeSync + 'static,
+    ) -> Self {
+        self.redirect = Some(Arc::new(hook));
+        self
+    }
+
+    /// Sets the token getter of each connection. It is exclusive with `token`
+    /// and `token_from`.
+    #[must_use]
+    pub fn get_token<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(ConnectionTokenContext) -> Fut + MaybeSend + MaybeSync + 'static,
+        Fut: Future<Output = Result<Option<String>, TokenError>> + MaybeSend + 'static,
+    {
+        self.token_getter = Some(Arc::new(
+            move |ctx: ConnectionTokenContext| -> TokenFuture { Box::pin(f(ctx)) },
+        ));
+        self
     }
 }
 
@@ -121,6 +218,14 @@ impl std::fmt::Debug for RpcPoolOptions {
             )
             .field("max_queued", &self.max_queued)
             .field("idle_timeout", &self.idle_timeout)
+            .field("retries", &self.retries)
+            .field("max_redirects_inflight", &self.max_redirects_inflight)
+            .field("max_redirect_bytes", &self.max_redirect_bytes)
+            .field("has_token", &!self.token.is_empty())
+            .field("token_from", &self.token_from)
+            .field("token_getter", &self.token_getter.is_some())
+            .field("reroute", &self.reroute.is_some())
+            .field("redirect", &self.redirect.is_some())
             .field("close_ended_session", &self.close_ended_session)
             .finish()
     }
@@ -147,8 +252,11 @@ pub struct RpcPoolStats {
     pub connections: usize,
     /// Calls holding a slot of a connection.
     pub inflight: usize,
-    /// Calls waiting for a connection.
+    /// Calls waiting for a connection, and redirect fetches waiting for a
+    /// slot.
     pub queued: usize,
+    /// Redirect fetches holding a slot.
+    pub redirects: usize,
 }
 
 /// Checks the pool options and returns the connection headers as a header
@@ -181,6 +289,17 @@ pub(crate) fn validate(options: &RpcPoolOptions) -> Result<HeaderMap, Error> {
     if options.idle_timeout > MAX_DURATION {
         return Err(Error::Configuration(
             "idle_timeout must not be longer than 24 hours".into(),
+        ));
+    }
+    if options.max_redirects_inflight < 1 || options.max_redirects_inflight > MAX_REDIRECTS_INFLIGHT
+    {
+        return Err(Error::Configuration(
+            "max_redirects_inflight must be from 1 to 16".into(),
+        ));
+    }
+    if options.token_from && (!options.token.is_empty() || options.token_getter.is_some()) {
+        return Err(Error::Configuration(
+            "token_from is exclusive with token and get_token".into(),
         ));
     }
     duration("timeout", options.timeout)?;
@@ -265,6 +384,45 @@ mod tests {
         assert_eq!(pool.idle_timeout, Duration::from_secs(60));
         assert!(pool.close_ended_session);
         assert!(pool.headers.is_empty());
+        assert_eq!(pool.retries, 3);
+        assert_eq!(pool.max_redirects_inflight, 4);
+        assert_eq!(pool.max_redirect_bytes, 16 * 1024 * 1024);
+        assert!(pool.token.is_empty());
+        assert!(!pool.token_from);
+        assert!(pool.reroute.is_none());
+        assert!(pool.redirect.is_none());
+        assert!(pool.token_getter.is_none());
+    }
+
+    #[test]
+    fn pool_redirects_inflight_range_is_one_to_sixteen() {
+        let mut low: RpcPoolOptions = options();
+        low.max_redirects_inflight = 0;
+        assert!(is_configuration(&validate(&low)));
+        let mut high: RpcPoolOptions = options();
+        high.max_redirects_inflight = 17;
+        assert!(is_configuration(&validate(&high)));
+        for accepted in [1_usize, 16] {
+            let mut pool: RpcPoolOptions = options();
+            pool.max_redirects_inflight = accepted;
+            assert!(validate(&pool).is_ok());
+        }
+    }
+
+    #[test]
+    fn pool_token_from_is_exclusive_with_token_and_getter() {
+        let mut with_token: RpcPoolOptions = options();
+        with_token.token_from = true;
+        with_token.token = "jwt".to_owned();
+        assert!(is_configuration(&validate(&with_token)));
+        let getter: RpcPoolOptions =
+            options().get_token(|_: crate::ConnectionTokenContext| async { Ok(None) });
+        let mut with_getter: RpcPoolOptions = getter;
+        with_getter.token_from = true;
+        assert!(is_configuration(&validate(&with_getter)));
+        let mut alone: RpcPoolOptions = options();
+        alone.token_from = true;
+        assert!(validate(&alone).is_ok());
     }
 
     #[test]
