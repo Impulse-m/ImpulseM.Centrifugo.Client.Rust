@@ -181,7 +181,8 @@ impl RpcCallInner {
                 ));
             }
             if tracked && msg_id.is_none() {
-                msg_id = Some(self.shared.rpc.next_msg_id()?);
+                let server_time_ms: i64 = self.shared.server_time.now_millis();
+                msg_id = Some(self.shared.rpc.next_msg_id(server_time_ms)?);
             }
             let attempt: Option<u64> = if tracked { msg_id } else { None };
             let id: u32 = self.shared.next_call_id();

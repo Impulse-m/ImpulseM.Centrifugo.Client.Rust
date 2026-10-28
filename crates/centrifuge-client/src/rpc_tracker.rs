@@ -19,7 +19,6 @@ use centrifuge_client_core::proto;
 
 use crate::error::Error;
 use crate::msg_id::MsgIdGenerator;
-use crate::server_time::wall_millis;
 use crate::shared::{SessionHandle, Shared, lock};
 use crate::transport::WriteReq;
 
@@ -139,17 +138,18 @@ impl RpcTracker {
         }))
     }
 
-    /// The `msg_id` of the next tracked write.
+    /// The `msg_id` of the next tracked write, for the server time in
+    /// milliseconds (the local clock plus the server offset).
     ///
     /// # Errors
     ///
     /// [`Error::Configuration`] when the `msg_id` space is exhausted.
-    pub(crate) fn next_msg_id(&self) -> Result<u64, Error> {
+    pub(crate) fn next_msg_id(&self, server_time_ms: i64) -> Result<u64, Error> {
         let mut guard = lock(&self.generator);
         let generator: &mut MsgIdGenerator = guard.get_or_insert_with(|| {
-            MsgIdGenerator::new(wall_millis(), MsgIdGenerator::random_lane())
+            MsgIdGenerator::new(server_time_ms, MsgIdGenerator::random_lane())
         });
-        generator.next(wall_millis())
+        generator.next(server_time_ms)
     }
 }
 
@@ -230,6 +230,8 @@ mod tests {
     use bytes::Bytes;
     use std::collections::HashMap;
 
+    const NOW_MS: i64 = 1_700_000_000_000;
+
     #[test]
     fn rpc_admit_without_instance_never_counts_a_call() {
         let tracker: RpcTracker = RpcTracker::new(false, 1);
@@ -257,10 +259,17 @@ mod tests {
     #[test]
     fn rpc_next_msg_id_is_increasing_and_below_two_pow_53() {
         let tracker: RpcTracker = RpcTracker::new(true, 32);
-        let first: u64 = tracker.next_msg_id().expect("an id");
-        let second: u64 = tracker.next_msg_id().expect("an id");
+        let first: u64 = tracker.next_msg_id(NOW_MS).expect("an id");
+        let second: u64 = tracker.next_msg_id(NOW_MS).expect("an id");
         assert!(second > first);
         assert!(second < 1 << 53);
+    }
+
+    #[test]
+    fn rpc_next_msg_id_takes_the_server_second_not_the_local_clock() {
+        let tracker: RpcTracker = RpcTracker::new(true, 32);
+        let id: u64 = tracker.next_msg_id(NOW_MS + 3_600_000).expect("an id");
+        assert_eq!(id >> 20, 1_700_003_600);
     }
 
     #[test]
