@@ -2,12 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-  merge_group:
-  schedule:
-    # Weekly: new RustSec advisories and breakage from upcoming toolchains.
-    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -23,256 +19,80 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
+  # Build and test on both desktop platforms the C ABI ships to. The toolchain
+  # is pinned to rust-toolchain.toml; no secrets are needed.
   test:
-    name: test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        toolchain: [stable]
-        include:
-          # Early warning for the next release; failures don't block merges.
-          - os: ubuntu-latest
-            toolchain: beta
-    continue-on-error: ${{ matrix.toolchain == 'beta' }}
+        os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: 1.96.1
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test --workspace --all-features --locked --no-fail-fast
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked --no-fail-fast
         env:
           RUSTFLAGS: -D warnings
-      - run: cargo bench --workspace --no-run --locked
-        if: matrix.os == 'ubuntu-latest' && matrix.toolchain == 'stable'
-
-  # Against real Centrifugo (docker-compose.yml, docs/spec.md §11.4).
-  real-server:
-    name: real server (Centrifugo)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Centrifugo PRO (channel compaction) runs locally only: see CONTRIBUTING.md.
-      - run: docker compose up -d --wait
-      - run: cargo test -p centrifuge-client --test real_server --locked
-        env:
-          CENTRIFUGO_TESTS: "1"
-      - if: failure()
-        run: docker compose logs --tail 200
-
-  msrv:
-    name: MSRV
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Read rust-version from Cargo.toml
-        id: msrv
-        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ steps.msrv.outputs.version }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --workspace --lib --all-features --locked
-
-  features:
-    name: feature combinations
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
-        with:
-          tool: cargo-hack
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Without a TLS crypto provider the client is a compile_error! (spec
-      # §3.3); depth 3 covers the codec × transport × provider combinations.
-      # No --locked: --no-dev-deps edits the manifests, so the lock file differs.
-      - run: cargo hack check --workspace --feature-powerset --depth 3 --at-least-one-of aws-lc-rs,ring --exclude-features test-util --no-dev-deps
+      - run: cargo build -p impulse-centrifugo-ffi --release --locked
         env:
           RUSTFLAGS: -D warnings
 
-  minimal-versions:
-    name: minimal dependency versions
+  # The committed header must be the cbindgen output for src/lib.rs.
+  header-drift:
+    name: C header matches cbindgen
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: nightly
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
-          tool: cargo-hack,cargo-minimal-versions
-      # The lower bounds in Cargo.toml must really build: users may resolve them.
-      - run: cargo minimal-versions check --workspace --direct --all-features
+          tool: cbindgen@0.29.4
+      - name: Generate the header
+        run: cbindgen --config crates/impulse-centrifugo-ffi/cbindgen.toml --crate impulse-centrifugo-ffi --output "$RUNNER_TEMP/impulse_centrifugo.h"
+      - name: Compare with the committed header
+        shell: bash
+        run: diff --strip-trailing-cr -u crates/impulse-centrifugo-ffi/include/impulse_centrifugo.h "$RUNNER_TEMP/impulse_centrifugo.h"
 
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
+  # The header must compile with MSVC as C, warnings as errors.
+  header-msvc:
+    name: C header compiles with MSVC
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Nightly, as docs.rs builds with it (`--cfg docsrs`).
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: nightly
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo doc --workspace --no-deps --all-features --locked
-        env:
-          RUSTDOCFLAGS: --cfg docsrs -D warnings
-
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # Codecov upload via OIDC, no token secret.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
-        with:
-          tool: cargo-llvm-cov
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path lcov.info
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        # Fork PRs get no OIDC token; coverage is informational there.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        with:
-          files: lcov.info
-          use_oidc: true
-          fail_ci_if_error: false
-
-  wasm-core:
-    name: core builds for wasm32
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The sans-IO core must stay free of IO and runtime dependencies, so a
-      # browser build stays possible (docs/spec.md §9.11).
-      - run: cargo check -p centrifuge-client-core --target wasm32-unknown-unknown --locked
-        env:
-          RUSTFLAGS: -D warnings
-
-  deny:
-    name: cargo-deny (${{ matrix.checks }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        checks: [advisories, bans licenses sources]
-    # A new advisory against an existing dependency shouldn't block unrelated
-    # PRs; it still fails on main and in the weekly run.
-    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check ${{ matrix.checks }}
-
-  typos:
-    name: typos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
-
-  zizmor:
-    name: workflow security (zizmor)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
-        with:
-          # Report in the log instead of uploading SARIF (needs no extra permissions).
-          advanced-security: false
-
-  # One required check for branch protection, independent of the job list above.
-  ci-success:
-    name: CI success
-    if: always()
-    needs: [fmt, clippy, test, real-server, msrv, features, minimal-versions, docs, wasm-core, deny, typos, zizmor]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail if any required job failed or was cancelled
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: exit 1
+      - name: Compile a probe that includes the header
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $header = (Resolve-Path 'crates/impulse-centrifugo-ffi/include/impulse_centrifugo.h').Path
+          $probe = Join-Path $env:RUNNER_TEMP 'impulse_header_probe.c'
+          $batch = Join-Path $env:RUNNER_TEMP 'impulse_header_probe.bat'
+          Set-Content -Path $probe -Encoding ascii -Value @(
+              "#include `"$header`"",
+              'int impulse_header_probe(void) { return IMPULSE_CENTRIFUGO_ABI_VERSION; }'
+          )
+          Set-Content -Path $batch -Encoding ascii -Value @(
+              '@echo off',
+              "set `"PATH=${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer;%PATH%`"",
+              "call `"$vcvars`" >nul",
+              "cl /c /nologo /W4 /WX /Fo`"$env:RUNNER_TEMP\impulse_header_probe.obj`" `"$probe`""
+          )
+          cmd.exe /d /c $batch
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
