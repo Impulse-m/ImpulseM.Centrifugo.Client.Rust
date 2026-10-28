@@ -2198,3 +2198,75 @@ fn refresh_refused_for_identity_keeps_the_connection_without_a_retry() {
     assert!(!h.core.timers.is_armed(TimerKey::Refresh));
     assert_eq!(h.core.conn.refused_token, None);
 }
+
+#[test]
+fn token_status_confirms_the_connect_token_and_each_accepted_refresh() {
+    let mut h = H::new(CoreConfig {
+        has_get_token: true,
+        token: "t0".into(),
+        ..CoreConfig::default()
+    });
+    assert_eq!(h.core.token_status().confirmations, 0);
+    let t = h.connect_with(proto::ConnectResult {
+        ping: 25,
+        pong: true,
+        ..Default::default()
+    });
+    let status: TokenStatus = h.core.token_status();
+    assert_eq!(status.confirmed.as_deref(), Some("t0"));
+    assert_eq!(status.confirmations, 1);
+    assert!(status.renewable);
+    h.op(Op::RenewToken);
+    settle_refresh_getter(&mut h, "t1");
+    let id = refresh_id(&h.take_commands());
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            refresh: Some(proto::RefreshResult::default()),
+            ..Default::default()
+        },
+    );
+    let status: TokenStatus = h.core.token_status();
+    assert_eq!(status.confirmed.as_deref(), Some("t1"));
+    assert_eq!(status.confirmations, 2);
+    assert_eq!(status.refresh_settled, 0);
+}
+
+#[test]
+fn renew_token_without_a_getter_does_nothing() {
+    let mut h = H::new(CoreConfig {
+        token: "t0".into(),
+        ..CoreConfig::default()
+    });
+    h.connect_with(proto::ConnectResult {
+        ping: 25,
+        pong: true,
+        ..Default::default()
+    });
+    h.op(Op::RenewToken);
+    assert!(h.callbacks.is_empty());
+    assert!(!h.core.token_status().renewable);
+}
+
+#[test]
+fn a_refusal_that_a_renewal_does_not_repair_settles_the_refresh() {
+    let (mut h, t) = expiring_connection(true);
+    settle_refresh_getter(&mut h, "t1");
+    let id = refresh_id(&h.take_commands());
+    h.reply(
+        t,
+        proto::Reply {
+            id,
+            error: Some(proto::Error {
+                code: 109,
+                message: "token expired".into(),
+                temporary: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(h.core.token_status().refresh_settled, 1);
+    assert_eq!(h.core.token_status().confirmations, 1);
+}

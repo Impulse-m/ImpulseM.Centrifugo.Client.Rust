@@ -438,6 +438,7 @@ impl Driver {
             ready: after_delivery && state == State::Connected,
             session,
             core_stats: self.core.stats(),
+            token: self.core.token_status(),
         };
         if state == State::Connected {
             let mut since = lock(&self.shared.connected_since);

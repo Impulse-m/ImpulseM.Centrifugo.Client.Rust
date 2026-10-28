@@ -117,9 +117,11 @@ pub struct RpcPoolOptions {
     /// The token of each connection, for a pool without `token_from`. Empty
     /// means no token. Exclusive with `token_from` and the token getter.
     pub token: String,
-    /// Whether the connections take their token from the main client. Exclusive
-    /// with `token` and the token getter. Not supported yet: the pool refuses
-    /// it at creation until the main client exposes its confirmed token.
+    /// Whether the connections take their token from the main client: each is
+    /// lent the main client's confirmed token, the one the server accepted at
+    /// its last connect or accepted refresh. A connection refused its token
+    /// asks the main client for one renewal per confirmed token. Exclusive
+    /// with `token` and the token getter.
     pub token_from: bool,
     /// Closes the idle connections once a call finds the main client closed,
     /// instead of at the idle timeout.

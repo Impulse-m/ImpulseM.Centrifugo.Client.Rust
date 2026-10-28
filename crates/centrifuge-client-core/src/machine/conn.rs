@@ -1,5 +1,6 @@
 //! Connection behaviour (docs/spec.md §5.8, §6).
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::timers::{backoff, token_retry_delay};
@@ -85,6 +86,14 @@ pub(super) struct Conn {
     /// The token the server refused as expired on a refresh, kept for
     /// `stop_on_refused_token`.
     pub(super) refused_token: Option<String>,
+    /// The token the server last confirmed: the connect token of the last
+    /// connect, or the token of the last accepted refresh.
+    pub(super) confirmed: Option<Arc<str>>,
+    /// Bumped at each confirmation.
+    pub(super) confirmations: u64,
+    /// Bumped when a refresh ends with a refusal that a new token of the same
+    /// kind does not repair (see `refresh_settles`).
+    pub(super) refresh_settled: u64,
     pub(super) ping_window: Option<Duration>,
     /// When the current connection last delivered a decoded item.
     pub(super) last_received: Option<Instant>,
@@ -114,6 +123,9 @@ impl Conn {
             token_expires_at: None,
             token_failures: 0,
             refused_token: None,
+            confirmed: None,
+            confirmations: 0,
+            refresh_settled: 0,
             ping_window: None,
             last_received: None,
             pong: false,
@@ -142,6 +154,25 @@ impl Conn {
             node: self.node.clone(),
         })
     }
+
+    /// Records a token the server accepted: a connect, or a refresh reply.
+    pub(super) fn confirm(&mut self, token: &str) {
+        self.confirmed = Some(Arc::from(token));
+        self.confirmations = self.confirmations.saturating_add(1);
+    }
+}
+
+/// Whether a failed refresh is a refusal that a renewal of the same kind does
+/// not repair, so a pool that lent the token spends it: 103, 109, or a
+/// non-temporary server error. A timeout, a client error and a temporary
+/// error are not.
+fn refresh_settles(err: Option<&proto::Error>) -> bool {
+    let Some(e) = err else {
+        return false;
+    };
+    e.code == REFRESH_REFUSED_IDENTITY
+        || e.code == codes::TOKEN_EXPIRED
+        || (e.code >= 100 && !e.temporary)
 }
 
 /// Parses a legacy JSON close reason `{"code","reason","reconnect"}`.
@@ -576,6 +607,8 @@ impl Core {
         self.conn.refresh_required = false;
         self.conn.token_failures = 0;
         self.state = State::Connected;
+        let connect_token: String = self.conn.connect_token.clone();
+        self.conn.confirm(&connect_token);
         self.conn.session.clone_from(&res.session);
         self.conn.node.clone_from(&res.node);
         self.stats.connects += 1;
@@ -1164,6 +1197,7 @@ impl Core {
                             && self.conn.refused_token.as_deref() == Some(t.as_str())
                         {
                             self.conn.refresh_required = true;
+                            self.conn.refresh_settled = self.conn.refresh_settled.saturating_add(1);
                             return;
                         }
                         self.conn.token.clone_from(&t);
@@ -1220,6 +1254,7 @@ impl Core {
         // memory restart (docs/spec.md §6.6).
         self.conn.token_failures = 0;
         self.conn.refused_token = None;
+        self.conn.confirm(&token);
         self.conn.client_refresh = r.expires;
         if r.expires {
             let ttl = Duration::from_secs(u64::from(r.ttl.max(1)));
@@ -1241,6 +1276,9 @@ impl Core {
     ) {
         if self.state != State::Connected || generation != self.generation {
             return;
+        }
+        if refresh_settles(err.as_ref()) {
+            self.conn.refresh_settled = self.conn.refresh_settled.saturating_add(1);
         }
         let message = match &err {
             Some(e) => format!("{} ({})", e.message, e.code),

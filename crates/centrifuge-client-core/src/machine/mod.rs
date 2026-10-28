@@ -452,6 +452,9 @@ pub enum Op {
     ReconnectNow,
     /// `set_token()`.
     SetToken(String),
+    /// Asks the token getter for a new connection token now, when connected
+    /// with a getter. A refresh that is already running is not waited for.
+    RenewToken,
     /// `set_data()`.
     SetData(Bytes),
     /// `set_emulated_headers()`.
@@ -791,6 +794,22 @@ pub struct Core {
     stats: CoreStats,
 }
 
+/// The connection token as the server confirmed it, for an rpc pool that lends
+/// it to its connections.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenStatus {
+    /// The token of the last connect or accepted refresh. `None` before the
+    /// first connect.
+    pub confirmed: Option<Arc<str>>,
+    /// Bumped at each confirmation.
+    pub confirmations: u64,
+    /// Bumped when a refresh ends with a refusal that a new token does not
+    /// repair: 103, 109, or a non-temporary server error.
+    pub refresh_settled: u64,
+    /// Whether a token getter is set, so a renewal can ask for a new token.
+    pub renewable: bool,
+}
+
 /// Counters for `Client::statistics()`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -901,6 +920,17 @@ impl Core {
         self.generation
     }
 
+    /// The connection token as the server confirmed it.
+    #[must_use]
+    pub fn token_status(&self) -> TokenStatus {
+        TokenStatus {
+            confirmed: self.conn.confirmed.clone(),
+            confirmations: self.conn.confirmations,
+            refresh_settled: self.conn.refresh_settled,
+            renewable: self.cfg.has_get_token,
+        }
+    }
+
     /// The connected session, while connected.
     #[must_use]
     pub fn session(&self) -> Option<Session> {
@@ -988,6 +1018,7 @@ impl Core {
                     self.conn.refresh_required = false;
                 }
             }
+            Op::RenewToken => self.on_refresh_timer(now, out),
             Op::SetData(d) => self.cfg.data = d,
             Op::SetEmulatedHeaders(h) => self.cfg.emulated_headers = h,
             Op::NewSubscription { key, config } => {

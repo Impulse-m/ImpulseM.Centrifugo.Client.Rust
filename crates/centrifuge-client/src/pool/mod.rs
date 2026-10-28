@@ -18,13 +18,16 @@
 //! with [`RpcPool::stats`]. Calls fail with a configuration error for the
 //! options that cannot work, with [`Error::ClientDisconnected`] while the main
 //! client is not connected, with code 16 when a fresh call finds the line
-//! full, and with [`Error::Timeout`] at their deadline.
+//! full, with code 3 (`token refused`) while a pool with `token_from` has a
+//! spent token and no connection to take the call, and with
+//! [`Error::Timeout`] at their deadline.
 
 mod endpoint;
 mod options;
 mod queue;
 mod redirect;
 mod retry;
+mod token_source;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -42,14 +45,22 @@ use options::{RerouteFn, validate, validate_call};
 use queue::{Admission, Join, Placement, SlotResult, Waiter};
 use redirect::{RedirectGate, allowed_redirect_url, fetch, fetched_result, redirect_failed};
 use retry::{draw, is_server_reply, later_delay, may_resend, wants_later};
+use token_source::TokenSource;
 
 use crate::client::{Client, ClientBuilder, ConnectionTokenContext};
 use crate::codes::disconnected;
 use crate::error::Error;
 use crate::rpc_tracker::{CODE_CANCELLED, CODE_LIMIT_EXCEEDED, local_error};
-use crate::shared::lock;
+use crate::shared::{Shared, lock};
 use crate::transport::net::Net;
 use crate::{Bytes, ConnectedEvent, DisconnectedEvent, RpcOptions, RpcResult, ServerError, State};
+
+/// The code of a call that no connection can take while the lent token is
+/// spent: the server's refusal of the token, as the other forks report it.
+const CODE_TOKEN_REFUSED: u32 = 3;
+
+/// The message of a call failed with [`CODE_TOKEN_REFUSED`].
+const MESSAGE_TOKEN_REFUSED: &str = "token refused";
 
 /// Calls by endpoint key over the connections of one main client's pool.
 ///
@@ -82,15 +93,12 @@ impl RpcPool {
     /// is no Tokio runtime.
     pub fn new(main: &Client, options: RpcPoolOptions) -> Result<Self, Error> {
         let headers: HeaderMap = validate(&options)?;
-        if options.token_from {
-            return Err(Error::Configuration(
-                "token_from needs a confirmed token the client does not expose yet".into(),
-            ));
-        }
         let runtime: tokio::runtime::Handle = tokio::runtime::Handle::try_current()
             .map_err(|_| Error::Configuration("the rpc pool needs a Tokio runtime".into()))?;
         let redirects: RedirectGate = RedirectGate::new(options.max_redirects_inflight);
         let (close_tx, _): (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
+        let tokens: Option<Arc<TokenSource>> =
+            options.token_from.then(|| Arc::new(TokenSource::new()));
         Ok(Self {
             inner: Arc::new(PoolInner {
                 main: main.clone(),
@@ -100,6 +108,7 @@ impl RpcPool {
                 state: Mutex::new(PoolState::default()),
                 redirects,
                 close_tx,
+                tokens,
             }),
         })
     }
@@ -208,6 +217,9 @@ struct PoolInner {
     /// Set to `true` when the pool closes, to end the redirect fetches in
     /// progress.
     close_tx: watch::Sender<bool>,
+    /// The token source of a pool with `token_from`: its connections are lent
+    /// the main client's confirmed token. `None` otherwise.
+    tokens: Option<Arc<TokenSource>>,
 }
 
 /// The answer of one attempt of a call: its outcome on its connection, and the
@@ -623,6 +635,9 @@ impl PoolInner {
         if state.closed {
             return Err(Error::ClientClosed);
         }
+        if self.refuses_spent(&state, &urls) {
+            return Err(local_error(CODE_TOKEN_REFUSED, MESSAGE_TOKEN_REFUSED));
+        }
         if join == Join::Fresh
             && state.queued() >= self.options.max_queued
             && self.opener(&state, &urls).is_none()
@@ -688,12 +703,46 @@ impl PoolInner {
         }
     }
 
-    /// Places the calls of every line.
+    /// Places the calls of every line. The lines that a spent token refuses
+    /// fail first.
     fn drain_all(self: &Arc<Self>, state: &mut PoolState) {
+        self.refuse_spent_lines(state);
         let keys: Vec<String> = state.lines.keys().cloned().collect();
         for key in keys {
             self.drain_key(state, &key);
         }
+    }
+
+    /// Fails the waiting calls of the keys that a spent token refuses.
+    fn refuse_spent_lines(&self, state: &mut PoolState) {
+        let keys: Vec<String> = state.lines.keys().cloned().collect();
+        for key in keys {
+            let urls: Vec<String> = state.keys.get(&key).cloned().unwrap_or_default();
+            if !self.refuses_spent(state, &urls) {
+                continue;
+            }
+            let Some(line) = state.lines.remove(&key) else {
+                continue;
+            };
+            for waiter in line {
+                let _ = waiter
+                    .sender
+                    .send(Err(local_error(CODE_TOKEN_REFUSED, MESSAGE_TOKEN_REFUSED)));
+            }
+        }
+    }
+
+    /// Whether a key's calls are refused for a spent token: the pool lends a
+    /// spent token, and no connected connection of the key's endpoints has a
+    /// slot for a call.
+    fn refuses_spent(&self, state: &PoolState, urls: &[String]) -> bool {
+        let Some(tokens) = self.tokens.as_ref() else {
+            return false;
+        };
+        tokens.is_spent(self.main.shared())
+            && state
+                .live_connection(urls, self.options.max_inflight_per_connection)
+                .is_none()
     }
 
     /// The first endpoint of the URLs that may open a connection now: not
@@ -786,6 +835,16 @@ impl PoolInner {
         }
         if let Some(getter) = self.options.token_getter.clone() {
             builder = builder.get_token(move |ctx: ConnectionTokenContext| getter(ctx));
+        }
+        if let Some(source) = self.tokens.clone() {
+            let main: Arc<Shared> = Arc::clone(self.main.shared());
+            let presented: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+            builder = builder.get_token(move |_: ConnectionTokenContext| {
+                let source: Arc<TokenSource> = Arc::clone(&source);
+                let main: Arc<Shared> = Arc::clone(&main);
+                let presented: Arc<Mutex<String>> = Arc::clone(&presented);
+                async move { source.lend(main, presented).await }
+            });
         }
         builder.build()
     }

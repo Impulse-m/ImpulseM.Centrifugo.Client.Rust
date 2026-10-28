@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use centrifuge_client_core::codec::Protocol;
-use centrifuge_client_core::machine::{Op, State, SubKey, SubState, TransportId, TransportKind};
+use centrifuge_client_core::machine::{
+    Op, State, SubKey, SubState, TokenStatus, TransportId, TransportKind,
+};
 use tokio::sync::{mpsc, watch};
 
 use crate::calls::CallTable;
@@ -45,6 +47,9 @@ pub(crate) struct Snapshot {
     pub(crate) ready: bool,
     pub(crate) session: Option<SessionHandle>,
     pub(crate) core_stats: centrifuge_client_core::machine::CoreStats,
+    /// The connection token as the server confirmed it, for the rpc pools
+    /// that lend it.
+    pub(crate) token: TokenStatus,
 }
 
 impl Default for Snapshot {
@@ -56,6 +61,7 @@ impl Default for Snapshot {
             ready: false,
             session: None,
             core_stats: centrifuge_client_core::machine::CoreStats::default(),
+            token: TokenStatus::default(),
         }
     }
 }
