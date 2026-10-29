@@ -11,6 +11,7 @@ use impulse_centrifugo_ffi::{
     ImpulseCentrifugoHeader, ImpulseCentrifugoStatus, impulse_centrifugo_abi_version,
     impulse_centrifugo_client_connect, impulse_centrifugo_client_create,
     impulse_centrifugo_client_destroy, impulse_centrifugo_client_disconnect,
+    impulse_centrifugo_client_reconnect_now,
 };
 
 const VALID_INSTANCE: &str = "abcdefghijklmnopqrstuv";
@@ -50,7 +51,7 @@ fn abi_version_matches_the_constant() {
         impulse_centrifugo_abi_version(),
         IMPULSE_CENTRIFUGO_ABI_VERSION
     );
-    assert_eq!(IMPULSE_CENTRIFUGO_ABI_VERSION, 2);
+    assert_eq!(IMPULSE_CENTRIFUGO_ABI_VERSION, 3);
 }
 
 #[test]
@@ -186,4 +187,28 @@ fn null_handles_are_rejected() {
         destroy_status,
         ImpulseCentrifugoStatus::InvalidArgument as i32
     );
+}
+
+#[test]
+fn reconnect_now_rejects_a_null_handle() {
+    // SAFETY: a null handle is the case under test; the function must not dereference it.
+    let status: i32 = unsafe { impulse_centrifugo_client_reconnect_now(ptr::null()) };
+    assert_eq!(status, ImpulseCentrifugoStatus::InvalidArgument as i32);
+}
+
+#[test]
+fn reconnect_now_on_a_created_client_succeeds() {
+    let endpoint: CString = endpoint();
+    let config: ImpulseCentrifugoConfig = config_for(&endpoint);
+    let (status, handle): (i32, *mut ImpulseCentrifugoClient) = create(&config);
+    assert_eq!(status, ImpulseCentrifugoStatus::Ok as i32);
+    assert!(!handle.is_null());
+
+    // SAFETY: the handle is live until destroy below; the client is not connected, so this is a no-op.
+    let reconnect_status: i32 = unsafe { impulse_centrifugo_client_reconnect_now(handle) };
+    assert_eq!(reconnect_status, ImpulseCentrifugoStatus::Ok as i32);
+
+    // SAFETY: the handle is not used after this call.
+    let destroy_status: i32 = unsafe { impulse_centrifugo_client_destroy(handle) };
+    assert_eq!(destroy_status, ImpulseCentrifugoStatus::Ok as i32);
 }

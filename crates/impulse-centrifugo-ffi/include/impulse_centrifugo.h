@@ -12,7 +12,7 @@
  * Version of this C ABI. Bumped when a signature, a struct layout or a status
  * value changes. The C++ side compares it with the header macro at startup.
  */
-#define IMPULSE_CENTRIFUGO_ABI_VERSION 2
+#define IMPULSE_CENTRIFUGO_ABI_VERSION 3
 
 /**
  * Kinds of [`ImpulseCentrifugoEvent`].
@@ -679,6 +679,19 @@ int32_t impulse_centrifugo_client_connect(const struct impulse_centrifugo_client
  * has not been destroyed.
  */
 int32_t impulse_centrifugo_client_disconnect(const struct impulse_centrifugo_client_t *client);
+
+/**
+ * Reconnects without waiting, for when the app resumes. Skips a pending
+ * reconnect backoff, or replaces a connection that has been silent for longer
+ * than the ping interval plus the max server ping delay. Does nothing when the
+ * caller disconnected the client.
+ *
+ * # Safety
+ *
+ * `client` must be a live handle from `impulse_centrifugo_client_create` that
+ * has not been destroyed.
+ */
+int32_t impulse_centrifugo_client_reconnect_now(const struct impulse_centrifugo_client_t *client);
 
 /**
  * Closes the client and frees the handle. When called from a thread outside

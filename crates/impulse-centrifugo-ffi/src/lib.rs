@@ -51,7 +51,7 @@ pub use token_cb::{
 
 /// Version of this C ABI. Bumped when a signature, a struct layout or a status
 /// value changes. The C++ side compares it with the header macro at startup.
-pub const IMPULSE_CENTRIFUGO_ABI_VERSION: u32 = 2;
+pub const IMPULSE_CENTRIFUGO_ABI_VERSION: u32 = 3;
 
 /// Worker threads of the runtime each client handle owns.
 const RUNTIME_WORKER_THREADS: usize = 2;
@@ -443,6 +443,29 @@ pub unsafe extern "C" fn impulse_centrifugo_client_disconnect(
             return status(ImpulseCentrifugoStatus::InvalidArgument);
         };
         handle.client.disconnect();
+        status(ImpulseCentrifugoStatus::Ok)
+    })
+}
+
+/// Reconnects without waiting, for when the app resumes. Skips a pending
+/// reconnect backoff, or replaces a connection that has been silent for longer
+/// than the ping interval plus the max server ping delay. Does nothing when the
+/// caller disconnected the client.
+///
+/// # Safety
+///
+/// `client` must be a live handle from `impulse_centrifugo_client_create` that
+/// has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn impulse_centrifugo_client_reconnect_now(
+    client: *const ImpulseCentrifugoClient,
+) -> i32 {
+    guarded(|| {
+        // SAFETY: a non-null handle is live by the caller's contract.
+        let Some(handle): Option<&ImpulseCentrifugoClient> = (unsafe { client.as_ref() }) else {
+            return status(ImpulseCentrifugoStatus::InvalidArgument);
+        };
+        handle.client.reconnect_now();
         status(ImpulseCentrifugoStatus::Ok)
     })
 }
