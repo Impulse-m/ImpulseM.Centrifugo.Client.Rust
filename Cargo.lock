@@ -901,6 +901,7 @@ dependencies = [
  "centrifuge-client",
  "centrifuge-fake-server",
  "http",
+ "percent-encoding",
  "tokio",
  "url",
 ]

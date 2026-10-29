@@ -288,7 +288,9 @@ typedef struct impulse_centrifugo_config_t {
   const char *instance;
   /**
    * The proxy, `http://host:port` (HTTP CONNECT) or `socks5://host:port`; null
-   * or an empty string connects directly.
+   * or an empty string connects directly. A `user:password@` in the URL is the
+   * proxy's credentials (Basic for HTTP, user name and password for SOCKS5),
+   * percent-decoded; they are removed from the URL before it is used.
    */
   const char *proxy_url;
   /**

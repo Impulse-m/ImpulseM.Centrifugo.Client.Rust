@@ -8,6 +8,7 @@
 
 #![allow(unsafe_code)]
 
+use std::borrow::Cow;
 use std::ffi::{CStr, c_char, c_void};
 use std::future::Future;
 use std::mem::size_of;
@@ -17,8 +18,9 @@ use std::ptr;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use centrifuge::{Client, ClientBuilder, ConnectionTokenContext, ProxyConfig};
+use centrifuge::{Client, ClientBuilder, ConnectionTokenContext, ProxyAuth, ProxyConfig};
 use http::{HeaderMap, HeaderName, HeaderValue};
+use percent_encoding::percent_decode_str;
 use tokio::runtime::{Builder, Handle, Runtime};
 use url::Url;
 
@@ -154,7 +156,9 @@ pub struct ImpulseCentrifugoConfig {
     /// `a-z`, `0-9`, `_` or `-`.
     pub instance: *const c_char,
     /// The proxy, `http://host:port` (HTTP CONNECT) or `socks5://host:port`; null
-    /// or an empty string connects directly.
+    /// or an empty string connects directly. A `user:password@` in the URL is the
+    /// proxy's credentials (Basic for HTTP, user name and password for SOCKS5),
+    /// percent-decoded; they are removed from the URL before it is used.
     pub proxy_url: *const c_char,
     /// Command timeout in milliseconds. Zero selects 30000.
     pub timeout_ms: u32,
@@ -262,18 +266,48 @@ unsafe fn copy_headers(
 }
 
 /// The proxy of the config: direct when absent, HTTP CONNECT for `http`,
-/// SOCKS5 with remote name resolution for `socks5`.
+/// SOCKS5 with remote name resolution for `socks5`. Credentials in the URL
+/// become the proxy's auth and are removed from the URL.
 fn proxy_from(proxy_url: Option<String>) -> Result<ProxyConfig, ImpulseCentrifugoStatus> {
     let text: String = match proxy_url {
         Some(value) if !value.is_empty() => value,
         _ => return Ok(ProxyConfig::None),
     };
-    let url: Url = Url::parse(&text).map_err(|_| ImpulseCentrifugoStatus::ConfigurationError)?;
+    let mut url: Url =
+        Url::parse(&text).map_err(|_| ImpulseCentrifugoStatus::ConfigurationError)?;
+    let auth: Option<ProxyAuth> = take_url_credentials(&mut url)?;
     match url.scheme() {
-        "http" | "https" => Ok(ProxyConfig::http(url, None)),
-        "socks5" => Ok(ProxyConfig::socks5(url, None, true)),
+        "http" | "https" => Ok(ProxyConfig::http(url, auth)),
+        "socks5" => Ok(ProxyConfig::socks5(url, auth, true)),
         _ => Err(ImpulseCentrifugoStatus::ConfigurationError),
     }
+}
+
+/// Removes the `user:password@` of `url` and returns it as proxy credentials,
+/// percent-decoded. A URL without a user name is left unchanged and yields no
+/// credentials.
+fn take_url_credentials(url: &mut Url) -> Result<Option<ProxyAuth>, ImpulseCentrifugoStatus> {
+    if url.username().is_empty() {
+        return Ok(None);
+    }
+    let username: String = decode_component(url.username())?;
+    let password: String = match url.password() {
+        Some(encoded) => decode_component(encoded)?,
+        None => String::new(),
+    };
+    url.set_username("")
+        .map_err(|()| ImpulseCentrifugoStatus::ConfigurationError)?;
+    url.set_password(None)
+        .map_err(|()| ImpulseCentrifugoStatus::ConfigurationError)?;
+    Ok(Some(ProxyAuth::new(username, password)))
+}
+
+/// Percent-decodes one URL component as UTF-8.
+fn decode_component(encoded: &str) -> Result<String, ImpulseCentrifugoStatus> {
+    let decoded: Cow<'_, str> = percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|_| ImpulseCentrifugoStatus::ConfigurationError)?;
+    Ok(decoded.into_owned())
 }
 
 /// `millis` as a duration, or `default_millis` when `millis` is zero.
@@ -525,7 +559,8 @@ pub unsafe extern "C" fn impulse_centrifugo_client_destroy(
 
 #[cfg(test)]
 mod tests {
-    use super::{ImpulseCentrifugoStatus, guarded};
+    use super::{ImpulseCentrifugoStatus, guarded, proxy_from};
+    use centrifuge::{ProxyAuth, ProxyConfig};
 
     #[test]
     fn guarded_passes_the_status_through() {
@@ -539,5 +574,65 @@ mod tests {
     fn guarded_turns_a_panic_into_the_panic_status() {
         let status: i32 = guarded(|| panic!("boom"));
         assert_eq!(status, ImpulseCentrifugoStatus::Panic as i32);
+    }
+
+    #[test]
+    fn http_credentials_become_the_proxy_auth_and_leave_the_url() {
+        let proxy: ProxyConfig = proxy_from(Some("http://user:secret@127.0.0.1:10809".to_owned()))
+            .expect("valid proxy URL");
+        match proxy {
+            ProxyConfig::Http { url, auth, .. } => {
+                assert_eq!(url.as_str(), "http://127.0.0.1:10809/");
+                assert_eq!(auth, Some(ProxyAuth::new("user", "secret")));
+            }
+            other => panic!("expected an HTTP proxy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn percent_encoded_credentials_are_decoded() {
+        let proxy: ProxyConfig =
+            proxy_from(Some("http://us%40er:p%3Ass%25@127.0.0.1:10809".to_owned()))
+                .expect("valid proxy URL");
+        match proxy {
+            ProxyConfig::Http { url, auth, .. } => {
+                assert!(!url.as_str().contains('%'));
+                assert_eq!(auth, Some(ProxyAuth::new("us@er", "p:ss%")));
+            }
+            other => panic!("expected an HTTP proxy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn url_without_credentials_has_no_proxy_auth() {
+        let proxy: ProxyConfig =
+            proxy_from(Some("http://127.0.0.1:10809".to_owned())).expect("valid proxy URL");
+        match proxy {
+            ProxyConfig::Http { url, auth, .. } => {
+                assert_eq!(url.as_str(), "http://127.0.0.1:10809/");
+                assert_eq!(auth, None);
+            }
+            other => panic!("expected an HTTP proxy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn socks5_credentials_become_the_proxy_auth_and_leave_the_url() {
+        let proxy: ProxyConfig = proxy_from(Some("socks5://user:secret@127.0.0.1:1080".to_owned()))
+            .expect("valid proxy URL");
+        match proxy {
+            ProxyConfig::Socks5 {
+                url,
+                auth,
+                remote_dns,
+                ..
+            } => {
+                assert!(!url.as_str().contains("secret"));
+                assert!(url.password().is_none());
+                assert!(remote_dns);
+                assert_eq!(auth, Some(ProxyAuth::new("user", "secret")));
+            }
+            other => panic!("expected a SOCKS5 proxy, got {other:?}"),
+        }
     }
 }
